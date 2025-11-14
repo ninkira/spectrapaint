@@ -1,0 +1,20 @@
+# Frontend
+chimagingtool/node_modules/
+chimagingtool/dist/
+*.log
+
+# Backend Python
+backend/.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+
+# Local HSI data
+backend/app/data/testdata/
+*.hdr
+*.img
+
+# OS junk
+.DS_Store
+Thumbs.db

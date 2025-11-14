@@ -1,0 +1,90 @@
+:root{
+  --bg:#0f1115; --panel:#141a22; --panel2:#10161f; --ink:#e8edf5;
+  --muted:#aab3c0; --border:#1f2633; --rail:#0c1119;
+}
+*{box-sizing:border-box}
+html,body,#root{height:100%;margin:0;background:var(--bg);color:var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;}
+button{cursor:pointer; background:transparent; border:0; color:inherit}
+
+/* App shell */
+.app{display:flex;flex-direction:column;height:100%}
+
+/* Toolbar (top) */
+.toolbar{
+  height:48px; display:flex; align-items:center; gap:12px;
+  background: var(--panel); border-bottom:1px solid var(--border); padding:0 12px;
+}
+.toolbar .title{font-weight:600}
+.toolbar .tools{margin-left:auto; display:flex; align-items:center; gap:6px}
+.toolbar .tools .divider{width:1px; height:22px; background:var(--border); margin:0 4px}
+.toolbar .tools button{width:30px; height:30px; border-radius:8px}
+.toolbar .tools button:hover{background:#1b2431}
+
+/* Main body layout: rail | layer manager | content (primary + work) */
+.body{
+  flex:1; display:grid;
+  grid-template-columns: 56px 280px 1fr;
+  grid-template-rows: 1fr;
+  min-height:0;
+}
+
+/* Project Navigation (left rail) */
+.project-nav{
+  background:var(--rail); border-right:1px solid var(--border);
+  display:flex; flex-direction:column; align-items:center; gap:10px; padding:10px 6px;
+}
+.nav-btn{
+  width:40px; height:40px; display:grid; place-items:center;
+  border:1px solid transparent; border-radius:10px; color:var(--muted);
+}
+.nav-btn:hover{background:#151c27; border-color:var(--border); color:var(--ink)}
+
+/* Layer Manager */
+.layer-manager{
+  background:var(--panel2); border-right:1px solid var(--border); display:flex; flex-direction:column; min-width:0;
+}
+.lm-header{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 12px; border-bottom:1px solid var(--border); color:var(--muted);
+  text-transform:uppercase; font-size:12px; letter-spacing:.08em;
+}
+.lm-actions button{width:28px; height:28px; border-radius:8px}
+.lm-actions button:hover{background:#151c27}
+.lm-list{padding:8px 8px 16px; overflow:auto; display:flex; flex-direction:column; gap:6px}
+.lm-item{
+  display:flex; align-items:center; gap:8px;
+  padding:8px; border:1px solid var(--border); border-radius:10px; background:#0f1521;
+}
+.lm-name{font-size:13px}
+
+/* Content: Primary Display | resizer | Work Area */
+.content{display:flex; min-width:0; overflow:hidden}
+
+/* Primary Display */
+.primary-wrap{display:flex; background:#0c111a; border-right:1px solid var(--border)}
+.primary-display{
+  padding:12px; display:flex; align-items:center; justify-content:center; width:100%; overflow:auto;
+}
+.primary-display img{
+  display:block; width:100%; height:auto; object-fit:contain; border-radius:6px;
+  border:1px solid var(--border); background:#0a0f18;
+}
+
+/* Resizer */
+.resizer{
+  width:6px; cursor:col-resize; background:linear-gradient(180deg, #121826, #0e1320);
+  border-right:1px solid var(--border); border-left:1px solid #0a0f18;
+}
+
+/* Work Area (right) */
+.work-area{flex:1; background:#0f141e; display:flex; align-items:center; justify-content:center; min-width:0}
+.work-empty{
+  color:var(--muted); font-size:14px; border:1px dashed var(--border);
+  padding:16px 22px; border-radius:10px; user-select:none;
+}
+
+/* Scrollbars (optional) */
+*::-webkit-scrollbar{height:10px;width:10px}
+*::-webkit-scrollbar-thumb{background:#1f2633;border-radius:8px}
+*::-webkit-scrollbar-track{background:#0b0f16}
