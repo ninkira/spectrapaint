@@ -1,1 +1,0 @@
-export type Layer = { id: number; name: string; on: boolean }
