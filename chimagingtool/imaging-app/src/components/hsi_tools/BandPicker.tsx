@@ -1,10 +1,11 @@
-import { useApp } from '../state/AppContext'
+import { useApp } from '../../state/AppContext'
 
 export default function BandPicker() {
   const { rgbBands, setRgbBands } = useApp()
 
   return (
     <div className="band-picker">
+      <h3>Band Selection</h3>
       <label>
         R:
         <input
@@ -14,7 +15,7 @@ export default function BandPicker() {
         />
       </label>
       <label>
-        G:
+        G
         <input
           type="number"
           value={rgbBands.g}

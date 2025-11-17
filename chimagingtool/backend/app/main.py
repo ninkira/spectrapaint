@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes_dataset import router as datasets_router  # ← singular
-from app.core.config import settings
+# AFTER
+from .api.routes_dataset import router as datasets_router
+from .core.config import settings
 
 app = FastAPI(title="HSI Service")
 

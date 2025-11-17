@@ -1,23 +1,23 @@
-// WorkArea.tsx
-import SpectrumPlot, { type Spectrum } from './HSITool'
-import BandPicker from './BandPicker'
+// ViewerPage.tsx (just an example name)
+import { useState } from 'react'
+import PrimaryDisplay from './PrimaryDisplay'
+import SpectrumPlot, { type Spectrum } from './hsi_tools/SpectrumPlot'
+import DatasetList from './ui/DatasetList'
 
-export default function WorkArea() {
-  const testSpectrum: Spectrum = {
-    x: 100,
-    y: 50,
-    wavelengths_nm: Array.from({ length: 50 }, (_, i) => 400 + i * 8),
-    values:       Array.from({ length: 50 }, (_, i) => Math.sin(i / 5) + 2),
-  }
+export default function ViewerPage() {
+  const [spectrum, setSpectrum] = useState<Spectrum>(null)
 
   return (
-    <section className="work-area" aria-label="Work Area">
-      <div className="work-empty">Work Area</div>
+    <div className="viewer-layout">
+      {/* left / center: image */}
+      <PrimaryDisplay onSpectrum={setSpectrum} />
 
-      <BandPicker />
-
-      {/* 👇 now we actually pass a spectrum */}
-      <SpectrumPlot spectrum={testSpectrum} />
-    </section>
+      {/* right: work area / tools */}
+      <section className="work-area" aria-label="Work Area">
+           <DatasetList />
+      
+        <SpectrumPlot spectrum={spectrum} />
+      </section>
+    </div>
   )
 }

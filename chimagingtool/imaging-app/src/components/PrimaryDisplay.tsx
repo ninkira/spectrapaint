@@ -1,103 +1,61 @@
 // PrimaryDisplay.tsx
-import { useRef, useState } from 'react'
-import type { MouseEvent } from 'react'
+import { useRef, type MouseEvent } from 'react'
 import { useApp } from '../state/AppContext'
-import SpectrumPlot from './HSITool'
+import BandPicker from './hsi_tools/BandPicker'
+import type { Spectrum } from './hsi_tools/SpectrumPlot'
 
-type Spectrum = {
-  wavelengths_nm: number[]
-  values: number[]
-  x: number
-  y: number
-} | null
+interface PrimaryDisplayProps {
+  onSpectrum?: (s: Spectrum) => void
+}
 
-export default function PrimaryDisplay() {
+export default function PrimaryDisplay({ onSpectrum }: PrimaryDisplayProps) {
   const { layers, rgbImgUrl, dataset } = useApp()
   const show = layers.find(l => l.id === 'rgb')?.on
-
   const imgRef = useRef<HTMLImageElement | null>(null)
-  const [spectrum, setSpectrum] = useState<Spectrum>(null)
-  const [selectedDisplayPixel, setSelectedDisplayPixel] = useState<{ x: number; y: number } | null>(null)
 
   const handleImageClick = async (e: MouseEvent<HTMLImageElement>) => {
     const img = imgRef.current
-    if (!img) return
+    if (!img || !dataset || !onSpectrum) return
 
     const rect = img.getBoundingClientRect()
-
-    // Click position relative to the rendered image
     const xDisplay = e.clientX - rect.left
     const yDisplay = e.clientY - rect.top
 
-    // Map to image pixel coordinates (natural resolution of the image)
     const scaleX = img.naturalWidth / rect.width
     const scaleY = img.naturalHeight / rect.height
-
     const xImg = Math.floor(xDisplay * scaleX)
     const yImg = Math.floor(yDisplay * scaleY)
 
-    // Store for marker overlay
-    setSelectedDisplayPixel({ x: xDisplay, y: yDisplay })
+    const params = new URLSearchParams({
+      x: xImg.toString(),
+      y: yImg.toString(),
+    })
 
-    try {
-      const params = new URLSearchParams({ x: xImg.toString(), y: yImg.toString() })
-      const res = await fetch(`/api/spectrum?${params.toString()}`)
-
-      if (!res.ok) {
-        console.error('Failed to fetch spectrum', await res.text())
-        return
-      }
-
-      const data = await res.json()
-      setSpectrum(data)
-    } catch (err) {
-      console.error('Error fetching spectrum', err)
+    const res = await fetch(`/api/datasets/${dataset.id}/spectra?${params}`)
+    if (!res.ok) {
+      console.error('Failed to fetch spectrum', await res.text())
+      return
     }
+
+    const data = await res.json()
+    onSpectrum(data)
   }
 
   return (
     <section className="primary-display" aria-label="Primary Display">
       {show && rgbImgUrl ? (
-        <>
-          <div
-            className="image-wrapper"
-            style={{ position: 'relative', width: '100%', maxHeight: '60vh', overflow: 'hidden' }}
-          >
-            <img
-              ref={imgRef}
-              src={rgbImgUrl}
-              alt={`RGB composite ${dataset ? `– ${dataset.name}` : ''}`}
-              style={{ width: '100%', height: 'auto', display: 'block', cursor: 'crosshair' }}
-              onClick={handleImageClick}
-            />
-
-            {/* Marker at clicked position (in displayed coords) */}
-            {selectedDisplayPixel && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: selectedDisplayPixel.x - 5,
-                  top: selectedDisplayPixel.y - 5,
-                  width: 10,
-                  height: 10,
-                  borderRadius: '50%',
-                  border: '2px solid #ff0000',
-                  pointerEvents: 'none',
-                }}
-              />
-            )}
-          </div>
-
-     
-
-          {/* Spectrum plot below the image */}
-          <div style={{ marginTop: '1rem' }}>
-            <SpectrumPlot spectrum={spectrum} />
-          </div>
-        </>
+        <img
+          ref={imgRef}
+          src={rgbImgUrl}
+          alt={`RGB composite ${dataset ? `– ${dataset.name}` : ''}`}
+          style={{ width: '100%', height: 'auto', display: 'block', cursor: 'crosshair' }}
+          onClick={handleImageClick}
+        />
       ) : (
         <div className="placeholder">No layer visible</div>
       )}
+<br/>
+      <BandPicker />
     </section>
   )
 }
