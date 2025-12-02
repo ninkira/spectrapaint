@@ -21,6 +21,11 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 .toolbar .tools button{width:30px; height:30px; border-radius:8px}
 .toolbar .tools button:hover{background:#1b2431}
 
+.toolbar button.active {
+  background: #1b2431;
+}
+
+
 /* Main body layout: rail | layer manager | content (primary + work) */
 .body{
   display:grid;
