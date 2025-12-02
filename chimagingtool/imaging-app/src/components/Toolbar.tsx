@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 
 import { useApp } from "../state/AppContext";
+import ShapeToolMenu from './ShapeToolMenu'
+
 
 export default function Toolbar() {
 
@@ -55,7 +57,7 @@ export default function Toolbar() {
             setSelectionMode("single");
           }}
         >
-          <MapPin size={20} />
+          <MapPin size={18} />
         </button>
 
         <button
@@ -66,8 +68,8 @@ export default function Toolbar() {
           <MapPinPlus size={20} />
         </button>
 
-        <button aria-label="SelectShape"><SquareDashed size={20} /></button>
-        <button aria-label="SelectLine"><WaypointsIcon size={20} /></button>
+         <ShapeToolMenu />
+
 
         <span className="divider" />
 

@@ -2,7 +2,7 @@ import React, {createContext, useContext, useEffect, useMemo, useState} from 're
 import { listDatasets, rgbUrl } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 
-type SelectionMode = "single" | "multiple";
+type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line'
 
 type Ctx = {
   layers: Layer[];

@@ -9,6 +9,13 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 
 /* App shell */
 .app{display:flex;flex-direction:column;height:100%}
+/* Make sure icons inside toolbar buttons have a visible size */
+.toolbar-btn svg {
+  width: 20px !important;
+  height: 20px !important;
+  flex-shrink: 0;
+}
+
 
 /* Toolbar (top) */
 .toolbar{
@@ -18,11 +25,96 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 .toolbar .title{font-weight:600}
 .toolbar .tools{ display:flex; align-items:center; gap:6px}
 .toolbar .tools .divider{width:1px; height:22px; background:var(--border); margin:0 4px}
-.toolbar .tools button{width:30px; height:30px; border-radius:8px}
+.toolbar .tools button{border-radius:8px}
 .toolbar .tools button:hover{background:#1b2431}
 
-.toolbar button.active {
+.toolbar {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+}
+
+.toolbar .title {
+  font-weight: 600;
+}
+
+.toolbar .tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar .tools .divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* 🔹 shared style for all top-row buttons */
+.toolbar-btn {
+
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;   /* ← THIS centers the icon */
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+}
+
+.toolbar .tools button,
+.toolbar-btn {
+  color: #fff !important;
+}
+
+.toolbar-btn:hover {
   background: #1b2431;
+}
+
+/* shape dropdown */
+.shape-tool {
+  position: relative;    /* keeps menu anchored to this button */
+}
+
+.shape-tool-menu {
+  position: absolute;
+  top: 34px;             /* just below the toolbar */
+  left: 0;
+  min-width: 160px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  padding: 4px 0;
+  z-index: 20;
+}
+
+.shape-tool-item {
+  width: 100%;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.shape-tool-item:hover {
+  background: #1b2431;
+}
+
+.shape-tool-item svg {
+  flex-shrink: 0;
 }
 
 
