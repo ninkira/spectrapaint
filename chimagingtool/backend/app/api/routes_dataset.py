@@ -49,11 +49,30 @@ def rgb(id: str, r: float = 650, g: float = 550, b: float = 450, stretch: str = 
     rgb8 = percent_stretch(rgb) if stretch.startswith("percent") else rgb.astype("uint8")
     return Response(content=png_bytes(rgb8), media_type="image/png")
 
+
 @router.get("/datasets/{id}/spectra")
 def spectra_at_pixel(id: str, x: int, y: int):
+    """
+    Return the full spectrum for a single pixel (x, y) in dataset `id`.
+    x = column index, y = row index, both in *RGB image / cube coordinates*.
+    """
     rec = registry().get(id)
-    if not rec: raise HTTPException(404, "Unknown dataset")
-    img = open_envi(rec["envi_hdr"]); md = read_metadata(img)
-    cube = load_cube(img); H, W, _ = cube.shape
-    if not (0 <= x < W and 0 <= y < H): raise HTTPException(400, "x/y out of bounds")
-    return {"wavelengths_nm": md["wavelengths_nm"], "reflectance": cube[y, x, :].astype(float).tolist()}
+    if not rec:
+        raise HTTPException(404, "Unknown dataset")
+
+    img = open_envi(rec["envi_hdr"])
+    md = read_metadata(img)
+    cube = load_cube(img)  # (H, W, B)
+    H, W, _ = cube.shape
+
+    if not (0 <= x < W and 0 <= y < H):
+        raise HTTPException(status_code=400, detail="x/y out of bounds")
+
+    spectrum = cube[y, x, :].astype(float)
+
+    return {
+        "x": x,
+        "y": y,
+        "wavelengths_nm": md["wavelengths_nm"],
+        "values": spectrum.tolist(),
+    }

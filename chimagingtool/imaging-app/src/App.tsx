@@ -42,7 +42,7 @@ function ResizableContent() {
   return (
     <div className="content">
       <div className="primary-wrap" style={{ width: `${primaryWidth}px` }}>
-        <PrimaryDisplay />
+     
       </div>
       <div className="resizer" onMouseDown={startDrag} role="separator" aria-orientation="vertical" />
       <WorkArea />
