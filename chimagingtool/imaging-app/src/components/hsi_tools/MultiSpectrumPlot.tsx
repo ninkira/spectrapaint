@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import Plot from 'react-plotly.js'
 import type { Data, Layout } from 'plotly.js'
-
 import type { Spectrum } from './SpectrumPlot'
 
 interface MultiSpectrumPlotProps {
@@ -14,21 +13,18 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
   const [showMean, setShowMean] = useState(true)
   const [showStd, setShowStd] = useState(true)
 
+  // 1) always called
   const nonNullSpectra = useMemo(
     () => spectra.filter((s): s is NonNullSpectrum => s !== null),
     [spectra]
   )
 
-  if (!nonNullSpectra.length) {
-    return (
-      <div style={{ padding: '1rem', color: '#666' }}>
-        Click on the image in multi-selection mode to add spectra.
-      </div>
-    )
-  }
-
-  // --------------------- compute mean + std ---------------------
+  // 2) always called (even if nonNullSpectra is empty)
   const { wavelengths, meanSpectrum, stdSpectrum } = useMemo(() => {
+    if (nonNullSpectra.length === 0) {
+      return { wavelengths: [] as number[], meanSpectrum: [] as number[], stdSpectrum: [] as number[] }
+    }
+
     const first = nonNullSpectra[0]
     const wl = first.wavelengths_nm
     const nPix = nonNullSpectra.length
@@ -37,7 +33,6 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
     const mean = new Array<number>(nBands).fill(0)
     const std = new Array<number>(nBands).fill(0)
 
-    // accumulate sums
     for (const spec of nonNullSpectra) {
       for (let i = 0; i < nBands; i++) {
         mean[i] += spec.values[i]
@@ -47,7 +42,6 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
       mean[i] /= nPix
     }
 
-    // accumulate variance
     for (const spec of nonNullSpectra) {
       for (let i = 0; i < nBands; i++) {
         const diff = spec.values[i] - mean[i]
@@ -61,7 +55,15 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
     return { wavelengths: wl, meanSpectrum: mean, stdSpectrum: std }
   }, [nonNullSpectra])
 
-  // --------------------- traces: individual spectra ---------------------
+  // ✅ NOW it is safe to early-return, all hooks above have run
+  if (!nonNullSpectra.length) {
+    return (
+      <div style={{ padding: '1rem', color: '#666' }}>
+        Click on the image in multi-selection mode to add spectra.
+      </div>
+    )
+  }
+
   const data: Data[] = nonNullSpectra.map((spec) => ({
     x: spec.wavelengths_nm,
     y: spec.values,
@@ -70,44 +72,41 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
     name: `(${spec.x}, ${spec.y})`,
   }))
 
-  // --------------------- traces: std band (shaded) ----------------------
-  if (showStd) {
+  // std band (shaded with dotted edges), controlled by showStd
+  if (showStd && wavelengths.length) {
     const lower = meanSpectrum.map((m, i) => m - stdSpectrum[i])
     const upper = meanSpectrum.map((m, i) => m + stdSpectrum[i])
 
-    const lowerTrace: Data = {
-      x: wavelengths,
-      y: lower,
-      type: 'scatter',
-      mode: 'lines',
-      line: { color: 'rgba(18, 49, 110, 1)', dash: 'dot', width: 1 },
-      hoverinfo: 'skip',
-      showlegend: false,
-    }
-
-    const upperTrace: Data = {
-      x: wavelengths,
-      y: upper,
-      type: 'scatter',
-      mode: 'lines',
-      name: '±1σ band',
-      line: { color: 'rgba(18, 49, 110, 1)', dash: 'dot', width: 1 },
-      fill: 'tonexty',
-      fillcolor: 'rgba(100, 149, 237, 0.25)', // semi-transparent band
-    }
-
-    data.push(lowerTrace, upperTrace)
+    data.push(
+      {
+        x: wavelengths,
+        y: lower,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Mean - 1σ',
+        line: { color: 'black', dash: 'dot', width: 1 },
+      },
+      {
+        x: wavelengths,
+        y: upper,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Mean + 1σ',
+        line: { color: 'black', dash: 'dot', width: 1 },
+        fill: 'tonexty',
+        fillcolor: 'rgba(100, 149, 237, 0.20)',
+      }
+    )
   }
 
-  // --------------------- trace: mean spectrum (on top) -------------------
-  if (showMean) {
+  if (showMean && wavelengths.length) {
     data.push({
       x: wavelengths,
       y: meanSpectrum,
       type: 'scatter',
       mode: 'lines',
       name: 'Mean spectrum',
-      line: { color: 'black', width: 2, dash: 'dot' },
+      line: { color: 'black', dash: 'dot', width: 2 },
     })
   }
 
@@ -121,7 +120,6 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
     legend: { orientation: 'h', y: -0.2 },
   }
 
-  // same button styling as single-spectrum plot
   const btnStyle: React.CSSProperties = {
     padding: '4px 10px',
     borderRadius: '6px',
@@ -142,7 +140,6 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
     <div>
       <h3>Spectra Plot (multiple)</h3>
 
-      {/* controls */}
       <div
         style={{
           marginBottom: '0.75rem',
@@ -153,14 +150,14 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
       >
         <button
           style={showMean ? activeStyle : btnStyle}
-          onClick={() => setShowMean(!showMean)}
+          onClick={() => setShowMean((v) => !v)}
         >
           Mean
         </button>
 
         <button
           style={showStd ? activeStyle : btnStyle}
-          onClick={() => setShowStd(!showStd)}
+          onClick={() => setShowStd((v) => !v)}
         >
           ±1σ
         </button>
