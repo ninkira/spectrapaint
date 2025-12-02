@@ -7,6 +7,7 @@ from .core.config import settings
 
 app = FastAPI(title="HSI Service")
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.FRONTEND_ORIGIN],
