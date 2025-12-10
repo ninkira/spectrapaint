@@ -40,7 +40,9 @@ export function AppProvider({children}:{children:React.ReactNode}) {
   const toggleLayer = (id:string) => setLayers(ls => ls.map(l => l.id===id ? {...l,on:!l.on}: l));
 
   // new for selection one or multiple pixels in the image
-  const [selectionMode, setSelectionMode] = useState<"single" | "multiple">("single");
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
+
+  
 
   const [selectedSpectra, setSelectedSpectra] = useState<Spectrum[]>([]);
 

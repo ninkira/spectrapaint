@@ -4,25 +4,35 @@ import type { Data, Layout } from 'plotly.js'
 import type { Spectrum } from './SpectrumPlot'
 
 interface MultiSpectrumPlotProps {
-  spectra: Spectrum[]
+  spectra?: Spectrum[]     // ← allow undefined
+  title?: string
+  emptyMessage?: string
 }
 
 type NonNullSpectrum = Exclude<Spectrum, null>
 
-const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
+const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({
+  spectra,
+  title = 'Multiple spectra (selected pixels)',
+  emptyMessage = 'Click on the image in multi-selection mode to add spectra.',
+}) => {
   const [showMean, setShowMean] = useState(true)
   const [showStd, setShowStd] = useState(true)
 
-  // 1) always called
+  const safeSpectra = spectra ?? [] // ← never undefined
+
   const nonNullSpectra = useMemo(
-    () => spectra.filter((s): s is NonNullSpectrum => s !== null),
-    [spectra]
+    () => safeSpectra.filter((s): s is NonNullSpectrum => s !== null),
+    [safeSpectra]
   )
 
-  // 2) always called (even if nonNullSpectra is empty)
   const { wavelengths, meanSpectrum, stdSpectrum } = useMemo(() => {
     if (nonNullSpectra.length === 0) {
-      return { wavelengths: [] as number[], meanSpectrum: [] as number[], stdSpectrum: [] as number[] }
+      return {
+        wavelengths: [] as number[],
+        meanSpectrum: [] as number[],
+        stdSpectrum: [] as number[],
+      }
     }
 
     const first = nonNullSpectra[0]
@@ -55,11 +65,11 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
     return { wavelengths: wl, meanSpectrum: mean, stdSpectrum: std }
   }, [nonNullSpectra])
 
-  // ✅ NOW it is safe to early-return, all hooks above have run
+  // empty state (no spectra)
   if (!nonNullSpectra.length) {
     return (
       <div style={{ padding: '1rem', color: '#666' }}>
-        Click on the image in multi-selection mode to add spectra.
+        {emptyMessage}
       </div>
     )
   }
@@ -72,7 +82,6 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
     name: `(${spec.x}, ${spec.y})`,
   }))
 
-  // std band (shaded with dotted edges), controlled by showStd
   if (showStd && wavelengths.length) {
     const lower = meanSpectrum.map((m, i) => m - stdSpectrum[i])
     const upper = meanSpectrum.map((m, i) => m + stdSpectrum[i])
@@ -113,7 +122,7 @@ const MultiSpectrumPlot: React.FC<MultiSpectrumPlotProps> = ({ spectra }) => {
   const layout: Partial<Layout> = {
     autosize: true,
     margin: { l: 50, r: 20, t: 40, b: 50 },
-    title: { text: 'Multiple spectra (selected pixels)' },
+    title: { text: title },
     xaxis: { title: { text: 'Wavelength (nm)' } },
     yaxis: { title: { text: 'Intensity / Reflectance' } },
     showlegend: true,
