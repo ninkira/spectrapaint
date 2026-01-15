@@ -9,8 +9,15 @@ interface PrimaryDisplayProps {
   onRegionSpectra?: (specs: Spectrum[]) => void // optional
 }
 
+/* types for selection forms and shapes */
 type NonNullSpectrum = Exclude<Spectrum, null>
-type Point = { x: number; y: number }
+type DisplayPoint = { x: number; y: number } /* Image Render Coord */
+type ImagePoint = { x: number; y: number } /* Actual HSI Coors */
+
+type Line = { p0: ImagePoint; p1: ImagePoint }
+type Polygon = { vertices: ImagePoint[] }
+
+
 
 type RegionOverlay = {
   x0: number
@@ -26,7 +33,7 @@ export default function PrimaryDisplay({
 }: PrimaryDisplayProps) {
   const {
     layers,
-    selectionMode, // 'single' | 'multiple' | 'rect' | 'ellipse' | 'line'
+    selectionMode, // 'single' | 'multiple' | 'rect' | 'ellipse' | 'line'  | 'polygon' 
     addSpectrum,
     rgbImgUrl,
     dataset,
@@ -36,15 +43,73 @@ export default function PrimaryDisplay({
   const show = layers.find((l) => l.id === 'rgb')?.on
   const imgRef = useRef<HTMLImageElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
+ {/* Circle/Retangle Selection */}
+  const [dragStart, setDragStart] = useState<DisplayPoint | null>(null)
+  const [dragCurrent, setDragCurrent] = useState<DisplayPoint | null>(null)
 
-  const [dragStart, setDragStart] = useState<Point | null>(null)
-  const [dragCurrent, setDragCurrent] = useState<Point | null>(null)
+   {/* Lines */}
+  const [lines, setLines] = useState<Line[]>([])
+  const [lineStart, setLineStart] = useState<DisplayPoint | null>(null)
+  const [lineCurrent, setLineCurrent] = useState<DisplayPoint | null>(null)
+
+  
+  const [polygons, setPolygons] = useState<Polygon[]>([]) /* if lines are connected */
+  {/*OVerlay */}
   const [lastRegion, setLastRegion] = useState<RegionOverlay | null>(null)
 
-  const isShapeMode = selectionMode === 'rect' || selectionMode === 'ellipse'
+  // Draft polyline vertices while drawing (Display space)
+const [draftVertices, setDraftVertices] = useState<DisplayPoint[] | null>(null)
+// Current mouse position for preview edge (Display space)
+const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
+
+const CLOSE_RADIUS_PX = 10
+
+const dist2 = (a: DisplayPoint, b: DisplayPoint) => {
+  const dx = a.x - b.x
+  const dy = a.y - b.y
+  return dx * dx + dy * dy
+}
+
+const isCloseToStart = (pt: DisplayPoint, verts: DisplayPoint[]) => {
+  if (verts.length === 0) return false
+  return dist2(pt, verts[0]) <= CLOSE_RADIUS_PX * CLOSE_RADIUS_PX
+}
+
+const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
+  // Polygon needs at least 3 vertices
+  if (verts.length < 3) return
+
+  const imgVerts: ImagePoint[] = []
+  for (const v of verts) {
+    const iv = toImageCoords(v)
+    if (!iv) return // bail safely if conversion fails
+    imgVerts.push(iv)
+  }
+
+  setPolygons((prev) => [...prev, { vertices: imgVerts }])
+
+  // Exit drawing state (your "move out of selection state")
+  setDraftVertices(null)
+  setDraftHover(null)
+
+  // Also stop line preview if you keep lineStart/lineCurrent
+  setLineStart(null)
+  setLineCurrent(null)
+}
+
+
+  
+
+
+
+  const isBoxMode = selectionMode === 'rect' || selectionMode === 'ellipse'  
+  const isPointMode = selectionMode === 'single' || selectionMode === 'multiple'  
+  const isLineMode = selectionMode === 'line'
+  const isPolygonMode = selectionMode === 'polygon'  
+
 
   // ---- helper: wrapper coords -> image coords ----
-  const toImageCoords = (display: Point): Point | null => {
+ const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
     const img = imgRef.current
     const wrapper = wrapperRef.current
     if (!img || !wrapper) return null
@@ -75,7 +140,7 @@ export default function PrimaryDisplay({
     return (await res.json()) as Spectrum
   }
 
-  const handlePixelClickAtDisplayPoint = async (displayPt: Point) => {
+  const handlePixelClickAtDisplayPoint = async (displayPt: DisplayPoint) => {
     const imgCoords = toImageCoords(displayPt)
     if (!imgCoords) return
 
@@ -88,6 +153,17 @@ export default function PrimaryDisplay({
       addSpectrum(spec)
     }
   }
+  const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
+  const img = imgRef.current
+  const wrapper = wrapperRef.current
+  if (!img || !wrapper) return null
+
+  const rect = wrapper.getBoundingClientRect()
+  const scaleX = rect.width / img.naturalWidth
+  const scaleY = rect.height / img.naturalHeight
+
+  return { x: imgPt.x * scaleX, y: imgPt.y * scaleY }
+}
 
   // ---- mouse handlers on wrapper ----
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
@@ -97,35 +173,114 @@ export default function PrimaryDisplay({
     e.preventDefault()
 
     const rect = wrapper.getBoundingClientRect()
-    const displayPt: Point = {
+    const displayPt: DisplayPoint = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     }
 
-    if (!isShapeMode) {
+    if (isPointMode) {
       // normal click → pixel spectrum
       void handlePixelClickAtDisplayPoint(displayPt)
       return
     }
-
-    // start drag for rect/ellipse
+    else if(isBoxMode){
+       // start drag for rect/ellipse
     setDragStart(displayPt)
     setDragCurrent(displayPt)
+    
+    }  else if (isLineMode) {
+  // Start a new draft polyline on first click
+  if (!draftVertices) {
+    setDraftVertices([displayPt])
+    setDraftHover(displayPt)
+
+    // for your existing preview line overlay
+    setLineStart(displayPt)
+    setLineCurrent(displayPt)
+    return
+  }
+
+  // If click is near start and we have enough vertices -> close polygon
+  if (isCloseToStart(displayPt, draftVertices)) {
+    finalizePolygonFromDraft(draftVertices)
+    return
+  }
+
+  // Otherwise: add a new segment from last vertex to this click
+  const last = draftVertices[draftVertices.length - 1]
+
+  const startImg = toImageCoords(last)
+  const endImg = toImageCoords(displayPt)
+  if (startImg && endImg) {
+    setLines((prev) => [...prev, { p0: startImg, p1: endImg }])
+  }
+
+  // Append vertex to draft
+  setDraftVertices((prev) => (prev ? [...prev, displayPt] : [displayPt]))
+  setDraftHover(displayPt)
+
+  // keep your preview anchored at new point
+  setLineStart(displayPt)
+  setLineCurrent(displayPt)
+  return
+}
+
+
+   else if (isPolygonMode) {
+  if (!draftVertices) {
+    setDraftVertices([displayPt])
+    setDraftHover(displayPt)
+    return
+  }
+
+  if (isCloseToStart(displayPt, draftVertices)) {
+    finalizePolygonFromDraft(draftVertices)
+    return
+  }
+
+  setDraftVertices((prev) => (prev ? [...prev, displayPt] : [displayPt]))
+  setDraftHover(displayPt)
+  return
+}
+
   }
 
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
-    if (!dragStart || !isShapeMode) return
+
     const wrapper = wrapperRef.current
     if (!wrapper) return
-
     e.preventDefault()
 
     const rect = wrapper.getBoundingClientRect()
-    setDragCurrent({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    })
+    const displayPt: DisplayPoint = {
+    x: e.clientX - rect.left,
+    y: e.clientY - rect.top,
+    }
+
+      // box preview
+    if (isBoxMode && dragStart) {
+      setDragCurrent(displayPt)
+    }
+
+    // line preview
+    if (isLineMode && lineStart) {
+      setLineCurrent(displayPt)
+    }
+
+    // Draft hover for both line and polygon modes
+if ((isLineMode || isPolygonMode) && draftVertices) {
+  setDraftHover(displayPt)
+}
+
+// Keep your existing line preview line working too (optional)
+if (isLineMode && lineStart) {
+  setLineCurrent(displayPt)
+}
+
   }
+
+
+   
 
   const handleMouseUp = async (e: MouseEvent<HTMLDivElement>) => {
     const wrapper = wrapperRef.current
@@ -135,16 +290,22 @@ export default function PrimaryDisplay({
       return
     }
 
-    if (!isShapeMode || !dataset) {
+    if (!isBoxMode || !dataset) {
       setDragStart(null)
       setDragCurrent(null)
       return
     }
-
+    /*this creates a bounding box for the shape selection*/
     const xMinDisp = Math.min(dragStart.x, dragCurrent.x)
     const xMaxDisp = Math.max(dragStart.x, dragCurrent.x)
     const yMinDisp = Math.min(dragStart.y, dragCurrent.y)
     const yMaxDisp = Math.max(dragStart.y, dragCurrent.y)
+
+    
+
+
+
+    
 
     const topLeftImg = toImageCoords({ x: xMinDisp, y: yMinDisp })
     const bottomRightImg = toImageCoords({ x: xMaxDisp, y: yMaxDisp })
@@ -175,14 +336,6 @@ export default function PrimaryDisplay({
           onRegionSpectra(data.spectra)
         }
 
-        // OPTIONAL: remove this block if you don't want region pixels
-        // added into the global multi-selection plot.
-        if (Array.isArray(data.spectra)) {
-          for (const s of data.spectra) {
-            addSpectrum(s)
-          }
-        }
-
         // keep region visible
         setLastRegion({
           x0: xMinDisp,
@@ -203,7 +356,133 @@ export default function PrimaryDisplay({
   // ---- overlay while dragging OR last region ----
   let selectionOverlay: JSX.Element | null = null
 
-  if (dragStart && dragCurrent && isShapeMode) {
+  let lineOverlay: JSX.Element | null = null
+
+  let polygonOverlay: JSX.Element | null = null
+
+
+  if (polygons.length > 0 || (draftVertices && draftVertices.length > 0)) {
+  polygonOverlay = (
+    <svg
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+      }}
+    >
+      {/* finished polygons */}
+      {polygons.map((poly, idx) => {
+        const pts = poly.vertices
+          .map(toDisplayCoords)
+          .filter((p): p is DisplayPoint => !!p)
+          .map((p) => `${p.x},${p.y}`)
+          .join(' ')
+
+        if (!pts) return null
+
+        return (
+          <polygon
+            key={idx}
+            points={pts}
+            fill="rgba(255,0,0,0.12)"
+            stroke="red"
+            strokeWidth={2}
+          />
+        )
+      })}
+
+      {/* draft polyline (in-progress) */}
+      {draftVertices && draftVertices.length > 0 && (
+        <>
+          {/* polyline through fixed vertices */}
+          <polyline
+            points={draftVertices.map((p) => `${p.x},${p.y}`).join(' ')}
+            fill="none"
+            stroke="red"
+            strokeWidth={2}
+          />
+
+          {/* preview edge to cursor */}
+          {draftHover && (
+            <line
+              x1={draftVertices[draftVertices.length - 1].x}
+              y1={draftVertices[draftVertices.length - 1].y}
+              x2={draftHover.x}
+              y2={draftHover.y}
+              stroke="red"
+              strokeWidth={2}
+              strokeDasharray="4,4"
+            />
+          )}
+
+          {/* start vertex handle (click to close) */}
+          <circle
+            cx={draftVertices[0].x}
+            cy={draftVertices[0].y}
+            r={6}
+            fill="white"
+            stroke="red"
+            strokeWidth={2}
+          />
+        </>
+      )}
+    </svg>
+  )
+}
+
+
+if ((isLineMode && lineStart && lineCurrent) || lines.length > 0) {
+  lineOverlay = (
+    <svg
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+      }}
+    >
+      {/* preview line */}
+      {isLineMode && lineStart && lineCurrent && (
+        <line
+          x1={lineStart.x}
+          y1={lineStart.y}
+          x2={lineCurrent.x}
+          y2={lineCurrent.y}
+          stroke="red"
+          strokeWidth={2}
+          strokeDasharray="4,4"
+        />
+      )}
+
+      {/* stored lines */}
+      {lines.map((line, idx) => {
+        const p0 = toDisplayCoords(line.p0)
+        const p1 = toDisplayCoords(line.p1)
+        if (!p0 || !p1) return null
+
+        return (
+          <line
+            key={idx}
+            x1={p0.x}
+            y1={p0.y}
+            x2={p1.x}
+            y2={p1.y}
+            stroke="red"
+            strokeWidth={2}
+          />
+        )
+      })}
+    </svg>
+  )
+}
+
+
+  if (dragStart && dragCurrent && isBoxMode) {
     const left = Math.min(dragStart.x, dragCurrent.x)
     const top = Math.min(dragStart.y, dragCurrent.y)
     const width = Math.abs(dragCurrent.x - dragStart.x)
@@ -214,7 +493,7 @@ export default function PrimaryDisplay({
         className={`selection-overlay ${
           selectionMode === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
         }`}
-        style={{ left, top, width, height }}
+        style={{ left, top, width, height,  border: '2px solid red' }}
       />
     )
   } else if (lastRegion) {
@@ -229,7 +508,7 @@ export default function PrimaryDisplay({
         className={`selection-overlay ${
           shape === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
         }`}
-        style={{ left, top, width, height }}
+        style={{ left, top, width, height,  border: '2px solid red' }}
       />
     )
   }
@@ -260,7 +539,7 @@ export default function PrimaryDisplay({
               width: '100%',
               height: 'auto',
               display: 'block',
-              cursor: isShapeMode ? 'crosshair' : 'pointer',
+        cursor: (isBoxMode || isLineMode || isPolygonMode) ? 'crosshair' : 'pointer',
             }}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
@@ -268,6 +547,10 @@ export default function PrimaryDisplay({
 
           {/* shape overlay */}
           {selectionOverlay}
+          {polygonOverlay}
+         {/* line overlay */}
+          {lineOverlay}
+
 
           {/* pixel markers */}
           {imgRef.current &&
@@ -290,7 +573,7 @@ export default function PrimaryDisplay({
                       height: '10px',
                       borderRadius: '50%',
                       border: '2px solid red',
-                      backgroundColor: 'white',
+                    
                       boxShadow: '0 0 4px rgba(0,0,0,0.6)',
                       pointerEvents: 'none',
                     }}
