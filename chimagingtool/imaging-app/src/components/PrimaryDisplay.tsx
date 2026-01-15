@@ -617,33 +617,35 @@ if ((isLineMode && lineStart && lineCurrent) || lines.length > 0) {
 
 
           {/* pixel markers */}
-          {imgRef.current &&
-            selectedSpectra
-              ?.filter((s): s is NonNullSpectrum => s !== null)
-              .map((s, idx) => {
-                const img = imgRef.current
-                const leftPct = ((s.x + 0.5) / img.naturalWidth) * 100
-                const topPct = ((s.y + 0.5) / img.naturalHeight) * 100
+          {/* pixel markers */}
+{isPointMode &&
+  imgRef.current &&
+  selectedSpectra
+    ?.filter((s): s is NonNullSpectrum => s !== null)
+    .map((s, idx) => {
+      const img = imgRef.current
+      const leftPct = ((s.x + 0.5) / img.naturalWidth) * 100
+      const topPct = ((s.y + 0.5) / img.naturalHeight) * 100
 
-                return (
-                  <div
-                    key={idx}
-                    style={{
-                      position: 'absolute',
-                      left: `${leftPct}%`,
-                      top: `${topPct}%`,
-                      transform: 'translate(-50%, -50%)',
-                      width: '10px',
-                      height: '10px',
-                      borderRadius: '50%',
-                      border: '2px solid red',
-                    
-                      boxShadow: '0 0 4px rgba(0,0,0,0.6)',
-                      pointerEvents: 'none',
-                    }}
-                  />
-                )
-              })}
+      return (
+        <div
+          key={idx}
+          style={{
+            position: 'absolute',
+            left: `${leftPct}%`,
+            top: `${topPct}%`,
+            transform: 'translate(-50%, -50%)',
+            width: '10px',
+            height: '10px',
+            borderRadius: '50%',
+            border: '2px solid red',
+            boxShadow: '0 0 4px rgba(0,0,0,0.6)',
+            pointerEvents: 'none',
+          }}
+        />
+      )
+    })}
+
         </div>
       ) : (
         <div className="placeholder">No layer visible</div>
