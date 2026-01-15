@@ -76,23 +76,32 @@ const isCloseToStart = (pt: DisplayPoint, verts: DisplayPoint[]) => {
 }
 
 const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
-  // Polygon needs at least 3 vertices
   if (verts.length < 3) return
 
   const imgVerts: ImagePoint[] = []
   for (const v of verts) {
     const iv = toImageCoords(v)
-    if (!iv) return // bail safely if conversion fails
+    if (!iv) return
     imgVerts.push(iv)
   }
 
   setPolygons((prev) => [...prev, { vertices: imgVerts }])
+void (async () => {
+  const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
+  if (!data?.spectra) return
 
-  // Exit drawing state (your "move out of selection state")
+  // keep callback (optional)
+  onRegionSpectra?.(data.spectra)
+
+  // IMPORTANT: add to global selection so Plotly updates (same as other modes)
+  for (const s of data.spectra) {
+    if (s) addSpectrum(s)
+  }
+})()
+
+
   setDraftVertices(null)
   setDraftHover(null)
-
-  // Also stop line preview if you keep lineStart/lineCurrent
   setLineStart(null)
   setLineCurrent(null)
 }
@@ -123,6 +132,53 @@ const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
       y: Math.floor(display.y * scaleY),
     }
   }
+
+
+const fetchSpectraAlongLine = async (p0: ImagePoint, p1: ImagePoint, step = 1) => {
+  if (!dataset) return null
+
+  const params = new URLSearchParams({
+    x0: p0.x.toString(),
+    y0: p0.y.toString(),
+    x1: p1.x.toString(),
+    y1: p1.y.toString(),
+    step: step.toString(),
+  })
+
+  const res = await fetch(`/api/datasets/${dataset.id}/spectra-line?${params}`)
+  if (!res.ok) {
+    console.error('Failed to fetch line spectra', await res.text())
+    return null
+  }
+  return (await res.json()) as { spectra: Spectrum[] }
+}
+
+const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number) => {
+  if (!dataset) return null
+
+  const res = await fetch(`/api/datasets/${dataset.id}/spectra-polygon`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      vertices,
+      ...(maxPoints !== undefined ? { max_points: maxPoints } : {}),
+    }),
+  })
+
+  if (!res.ok) {
+    console.error('Failed to fetch polygon spectra', await res.text())
+    return null
+  }
+
+  return (await res.json()) as {
+    spectra: Spectrum[]
+    truncated?: boolean
+    count?: number
+  }
+}
+
+
+  
 
   const fetchSpectrumAtImagePoint = async (xImg: number, yImg: number) => {
     if (!dataset) return null
@@ -190,19 +246,19 @@ const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
     
     }  else if (isLineMode) {
   // Start a new draft polyline on first click
-  if (!draftVertices) {
-    setDraftVertices([displayPt])
-    setDraftHover(displayPt)
-
-    // for your existing preview line overlay
-    setLineStart(displayPt)
-    setLineCurrent(displayPt)
+    if (!draftVertices) {
+      setDraftVertices([displayPt])
+      setDraftHover(displayPt)
+      // for your existing preview line overlay
+      setLineStart(displayPt)
+      setLineCurrent(displayPt)
     return
   }
 
   // If click is near start and we have enough vertices -> close polygon
   if (isCloseToStart(displayPt, draftVertices)) {
     finalizePolygonFromDraft(draftVertices)
+    
     return
   }
 
@@ -213,6 +269,14 @@ const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
   const endImg = toImageCoords(displayPt)
   if (startImg && endImg) {
     setLines((prev) => [...prev, { p0: startImg, p1: endImg }])
+  
+  // API call belongs HERE (segment exists here)
+  void (async () => {
+    const data = await fetchSpectraAlongLine(startImg, endImg, 1)
+    if (!data?.spectra) return
+    onRegionSpectra?.(data.spectra)
+    // or addSpectrum(...) if you prefer
+  })()
   }
 
   // Append vertex to draft
