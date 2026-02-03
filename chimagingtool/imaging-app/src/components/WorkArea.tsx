@@ -6,6 +6,7 @@ import PrimaryDisplay from './PrimaryDisplay'
 import SpectrumPlot, { type Spectrum } from './hsi_tools/SpectrumPlot'
 import MultiSpectrumPlot from './hsi_tools/MultiSpectrumPlot'
 import DatasetList from './ui/DatasetList'
+import DatasetInfo from './ui/DatasetInfo'
 
 export default function WorkArea() {
   const { selectionMode, selectedSpectra } = useApp()
@@ -50,7 +51,7 @@ export default function WorkArea() {
 
       {/* RIGHT: dataset list + exactly one plot */}
       <section className="work-area" aria-label="Work Area">
-        <DatasetList />
+        <DatasetInfo />
         {plot}
       </section>
     </div>

@@ -1,5 +1,5 @@
 // PrimaryDisplay.tsx
-import { useRef, useState, type MouseEvent } from 'react'
+import {useEffect, useRef, useState, type MouseEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
@@ -70,10 +70,31 @@ const dist2 = (a: DisplayPoint, b: DisplayPoint) => {
   return dx * dx + dy * dy
 }
 
+/** functions */
 const isCloseToStart = (pt: DisplayPoint, verts: DisplayPoint[]) => {
   if (verts.length === 0) return false
   return dist2(pt, verts[0]) <= CLOSE_RADIUS_PX * CLOSE_RADIUS_PX
 }
+
+const cancelActiveSelection = () => {
+  // cancel rect/ellipse drag preview
+  setDragStart(null)
+  setDragCurrent(null)
+
+  // cancel line/poly drafting
+  setDraftVertices(null)
+  setDraftHover(null)
+  setLineStart(null)
+  setLineCurrent(null)
+
+  // OPTIONAL: if you want Esc to also remove the last shown box overlay:
+  // setLastRegion(null)
+
+  // OPTIONAL: if you want Esc to clear drawn shapes:
+  // setLines([])
+  // setPolygons([])
+}
+
 
 const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
   if (verts.length < 3) return
@@ -220,6 +241,28 @@ const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number)
 
   return { x: imgPt.x * scaleX, y: imgPt.y * scaleY }
 }
+const hasActiveDraft =
+  dragStart !== null ||
+  draftVertices !== null ||
+  lineStart !== null
+
+useEffect(() => {
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return
+    if (!hasActiveDraft) return
+    e.preventDefault()
+
+    setDragStart(null)
+    setDragCurrent(null)
+    setDraftVertices(null)
+    setDraftHover(null)
+    setLineStart(null)
+    setLineCurrent(null)
+  }
+
+  window.addEventListener('keydown', onKeyDown)
+  return () => window.removeEventListener('keydown', onKeyDown)
+}, [hasActiveDraft])
 
   // ---- mouse handlers on wrapper ----
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
