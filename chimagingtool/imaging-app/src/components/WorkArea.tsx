@@ -5,14 +5,15 @@ import { useApp } from '../state/AppContext'
 import PrimaryDisplay from './PrimaryDisplay'
 import SpectrumPlot, { type Spectrum } from './hsi_tools/SpectrumPlot'
 import MultiSpectrumPlot from './hsi_tools/MultiSpectrumPlot'
-import DatasetList from './ui/DatasetList'
-import DatasetInfo from './ui/DatasetInfo'
+import DatasetInfo from './Dataset/DatasetInfo'
+import PigmentClassificationModal from './hsi_tools/PigmentClassification'
 
 export default function WorkArea() {
-  const { selectionMode, selectedSpectra } = useApp()
+    const { selectionMode, selectedSpectra, dataset } = useApp()
 
   const [spectrum, setSpectrum] = useState<Spectrum>(null)
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
+    const [isOpen, setIsOpen] = useState(false)
 
   const isRegionMode =
     selectionMode === 'rect' || selectionMode === 'ellipse'
@@ -53,7 +54,47 @@ export default function WorkArea() {
       <section className="work-area" aria-label="Work Area">
         <DatasetInfo />
         {plot}
+
+
+        
+        <div className="buttonRow">
+          <button className="btn btn-primary" onClick={() => setIsOpen(true)}>
+            Material Classification
+          </button>
+
+
+    <button className="btn btn-secondary">
+    Export Region
+  </button>
+
+    
+        <PigmentClassificationModal
+          isOpen={isOpen}
+          title={dataset ? `Pigment Classification – ${dataset.name}` : 'Pigment Classification'}
+          onClose={() => setIsOpen(false)}
+        >
+          {dataset ? (
+            <div style={{ fontSize: '0.9rem' }}>
+              <p><strong>ID:</strong> {dataset.id}</p>
+              <p><strong>Size:</strong> {dataset.width} × {dataset.height} pixels</p>
+              <p><strong>Bands:</strong> {dataset.wavelengths_nm.length}</p>
+
+              {/* Optional: show context */}
+              <p><strong>Selection mode:</strong> {selectionMode}</p>
+            </div>
+          ) : (
+            <p style={{ fontSize: '0.9rem' }}>
+              No dataset loaded. Select a dataset to run pigment classification.
+            </p>
+          )}
+        </PigmentClassificationModal>
+    </div>
+
+
+
       </section>
+
+               
     </div>
   )
 }
