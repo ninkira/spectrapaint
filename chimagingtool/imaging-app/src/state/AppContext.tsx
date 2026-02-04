@@ -1,29 +1,39 @@
 import React, {createContext, useContext, useEffect, useMemo, useState} from 'react';
 import { listDatasets, rgbUrl } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
+import type { Annotation } from '../models/annotations'
 
 type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' |  'polygon' 
 
+
 type Ctx = {
+  // Layers
   layers: Layer[];
   toggleLayer: (id: string) => void;
 
+  // dataset
   dataset?: DatasetMeta;
   datasetId?: string;
   setDatasetId: (id: string) => void;
 
+  //RGB
   rgbBands: { r: number; g: number; b: number };
   setRgbBands: (r: number, g: number, b: number) => void;
   rgbImgUrl?: string;
 
-  // NEW:
+  // Selection
   selectionMode: SelectionMode;
   setSelectionMode: (m: SelectionMode) => void;
 
-  // optional: store spectra inside context (recommended for multi-mode)
+  // spetra
   selectedSpectra: Spectrum[];
   addSpectrum: (s: Spectrum) => void;
   clearSpectra: () => void;
+
+   // Annotations 
+  annotations: Annotation[]
+  addAnnotation: (a: Annotation) => void
+  removeAnnotation: (id: string) => void
 };
 
 const Ctx = createContext<Ctx>(null as any);
@@ -37,6 +47,16 @@ export function AppProvider({children}:{children:React.ReactNode}) {
   const [rgbBands, setRgbBandsState] = useState({ r: 650, g: 550, b: 450 });
   const [rgbImgUrl, setRgbImgUrl] = useState<string>();
 
+// Annotations - based on selected ROI
+    const [annotations, setAnnotations] = useState<Annotation[]>([])
+
+  const addAnnotation = (a: Annotation) =>
+    setAnnotations(prev => [...prev, a])
+
+  const removeAnnotation = (id: string) =>
+    setAnnotations(prev => prev.filter(a => a.id !== id))
+
+// Select the annotation / ROI
   const toggleLayer = (id:string) => setLayers(ls => ls.map(l => l.id===id ? {...l,on:!l.on}: l));
 
   // new for selection one or multiple pixels in the image
@@ -66,22 +86,35 @@ export function AppProvider({children}:{children:React.ReactNode}) {
     setRgbImgUrl(u);
   }, [datasetId, datasets, rgbBands]);
 
-const value = useMemo(() => ({
+const ctxValue: Ctx = useMemo(() => ({
+  // Layers
   layers,
   toggleLayer,
+
+  // Dataset
   dataset,
   datasetId,
   setDatasetId,
+
+  // RGB
   rgbBands,
-  setRgbBands: (r:number,g:number,b:number)=>setRgbBandsState({r,g,b}),
+  setRgbBands: (r: number, g: number, b: number) =>
+    setRgbBandsState({ r, g, b }),
   rgbImgUrl,
 
-  // NEW:
+  // Selection
   selectionMode,
   setSelectionMode,
+
+  // Spectra
   selectedSpectra,
   addSpectrum,
   clearSpectra,
+
+  // Annotations
+  annotations,
+  addAnnotation,
+  removeAnnotation,
 }), [
   layers,
   dataset,
@@ -89,8 +122,13 @@ const value = useMemo(() => ({
   rgbBands,
   rgbImgUrl,
   selectionMode,
-  selectedSpectra
-]);
+  selectedSpectra,
+  annotations,
+])
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+return (
+  <Ctx.Provider value={ctxValue}>
+    {children}
+  </Ctx.Provider>
+)
 }
