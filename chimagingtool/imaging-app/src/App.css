@@ -134,7 +134,7 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 }
 
 .selection-overlay {
-  position: absolute;
+  position: absolute; box-sizing: border-box;
   border: 1px solid #4f8fff;
   background: rgba(79, 143, 255, 0.2);
   pointer-events: none; /* don't block clicks / drags */
@@ -151,28 +151,19 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
   flex-direction: row;
   width: 100%;
     min-width: 100%;
-  height: calc(100vh - 50px);
+  height: 100%;
   gap: 1rem;                      /* optional */
 }
 
 /* Left: image + band picker */
-.primary-display {
-  display: flex;
-  flex-direction: column;
-  flex:2;
-}
+.primary-display{ flex:2 1 0; min-width:0; display:flex; flex-direction:column; }
 
 /* Right: datasets + spectrum */
-.work-area {
-display: flex;
-flex: 2;
-  flex-direction: column;
-  gap: 1rem;
-  padding: 1rem;
-  overflow-y: auto;
-  border-left: 1px solid #333; /* optional */
+.work-area{ flex:1 1 0; min-width:0; overflow-y: scroll;  }
+.work-area,
+.lm-list {
+  scrollbar-gutter: stable;
 }
-
 
 /* Project Navigation (left rail) */
 .project-nav{
@@ -204,7 +195,13 @@ flex: 2;
 .lm-name{font-size:13px}
 
 /* Content: Primary Display | resizer | Work Area */
-.content{display:flex; min-width:100%; overflow:hidden}
+.content{
+  display: flex;
+  min-width: 0;     /* IMPORTANT */
+  overflow: hidden;
+  height: 100%;
+}
+
 
 /* Primary Display */
 .primary-wrap{display:flex; background:#0c111a; border-right:1px solid var(--border)}
@@ -219,9 +216,44 @@ flex: 2;
   user-drag: none;
   user-select: none;
 }
-.image-wrapper {
-  position: relative;
-  user-select: none;       /* avoid text selection while dragging */
+.image-wrapper{ width:100%; min-width:0; display:block; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+
+
+.buttonRow {
+  display: flex;
+  gap: 0.75rem;
+}
+
+/* Base button */
+.btn {
+  padding: 0.6rem 1.2rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+
+/* Secondary / neutral */
+.btn-secondary {
+  background-color: #d6dadd;
+  color: #4a4a4a;
+}
+
+.btn-secondary:hover {
+  background-color: #c8ccd0;
+}
+
+/* Primary action */
+.btn-primary {
+  background-color: #3b82f6;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #2563eb;
 }
 
 /* Resizer */

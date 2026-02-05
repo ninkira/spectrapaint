@@ -1,18 +1,21 @@
 // PrimaryDisplay.tsx
-import {useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
+import type { Annotation, RectAnn, EllipseAnn, LineAnn, PolygonAnn } from '../models/annotations'
 
 interface PrimaryDisplayProps {
   onSpectrum?: (s: Spectrum) => void
   onRegionSpectra?: (specs: Spectrum[]) => void // optional
 }
 
+
 /* types for selection forms and shapes */
 type NonNullSpectrum = Exclude<Spectrum, null>
 type DisplayPoint = { x: number; y: number } /* Image Render Coord */
 type ImagePoint = { x: number; y: number } /* Actual HSI Coors */
+
 
 type Line = { p0: ImagePoint; p1: ImagePoint }
 type Polygon = { vertices: ImagePoint[] }
@@ -38,108 +41,136 @@ export default function PrimaryDisplay({
     rgbImgUrl,
     dataset,
     selectedSpectra,
+    annotations,
+    addAnnotation,
+    clearProbePointsForDataset,
   } = useApp()
 
   const show = layers.find((l) => l.id === 'rgb')?.on
   const imgRef = useRef<HTMLImageElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
- {/* Circle/Retangle Selection */}
+  /* Circle/Retangle Selection */
   const [dragStart, setDragStart] = useState<DisplayPoint | null>(null)
   const [dragCurrent, setDragCurrent] = useState<DisplayPoint | null>(null)
 
-   {/* Lines */}
+  /* Lines */
   const [lines, setLines] = useState<Line[]>([])
   const [lineStart, setLineStart] = useState<DisplayPoint | null>(null)
   const [lineCurrent, setLineCurrent] = useState<DisplayPoint | null>(null)
 
-  
+
   const [polygons, setPolygons] = useState<Polygon[]>([]) /* if lines are connected */
-  {/*OVerlay */}
+  /* Overlay */
   const [lastRegion, setLastRegion] = useState<RegionOverlay | null>(null)
 
   // Draft polyline vertices while drawing (Display space)
-const [draftVertices, setDraftVertices] = useState<DisplayPoint[] | null>(null)
-// Current mouse position for preview edge (Display space)
-const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
+  const [draftVertices, setDraftVertices] = useState<DisplayPoint[] | null>(null)
+  // Current mouse position for preview edge (Display space)
+  const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
 
-const CLOSE_RADIUS_PX = 10
+  const [probeGroupId, setProbeGroupId] = useState<string | null>(null)
 
-const dist2 = (a: DisplayPoint, b: DisplayPoint) => {
-  const dx = a.x - b.x
-  const dy = a.y - b.y
-  return dx * dx + dy * dy
-}
-
-/** functions */
-const isCloseToStart = (pt: DisplayPoint, verts: DisplayPoint[]) => {
-  if (verts.length === 0) return false
-  return dist2(pt, verts[0]) <= CLOSE_RADIUS_PX * CLOSE_RADIUS_PX
-}
-
-const cancelActiveSelection = () => {
-  // cancel rect/ellipse drag preview
-  setDragStart(null)
-  setDragCurrent(null)
-
-  // cancel line/poly drafting
-  setDraftVertices(null)
-  setDraftHover(null)
-  setLineStart(null)
-  setLineCurrent(null)
-
-  // OPTIONAL: if you want Esc to also remove the last shown box overlay:
-  // setLastRegion(null)
-
-  // OPTIONAL: if you want Esc to clear drawn shapes:
-  // setLines([])
-  // setPolygons([])
-}
+  useEffect(() => {
+    if (selectionMode === 'multiple') {
+      setProbeGroupId(crypto.randomUUID())
+    } else {
+      setProbeGroupId(null)
+    }
+  }, [selectionMode])
 
 
-const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
-  if (verts.length < 3) return
+  const CLOSE_RADIUS_PX = 10
 
-  const imgVerts: ImagePoint[] = []
-  for (const v of verts) {
-    const iv = toImageCoords(v)
-    if (!iv) return
-    imgVerts.push(iv)
+  const dist2 = (a: DisplayPoint, b: DisplayPoint) => {
+    const dx = a.x - b.x
+    const dy = a.y - b.y
+    return dx * dx + dy * dy
   }
 
-  setPolygons((prev) => [...prev, { vertices: imgVerts }])
-void (async () => {
-  const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
-  if (!data?.spectra) return
-
-  // keep callback (optional)
-  onRegionSpectra?.(data.spectra)
-
-  // IMPORTANT: add to global selection so Plotly updates (same as other modes)
-  for (const s of data.spectra) {
-    if (s) addSpectrum(s)
+  /** functions */
+  const isCloseToStart = (pt: DisplayPoint, verts: DisplayPoint[]) => {
+    if (verts.length === 0) return false
+    return dist2(pt, verts[0]) <= CLOSE_RADIUS_PX * CLOSE_RADIUS_PX
   }
-})()
+
+  const cancelActiveSelection = () => {
+    // cancel rect/ellipse drag preview
+    setDragStart(null)
+    setDragCurrent(null)
+
+    // cancel line/poly drafting
+    setDraftVertices(null)
+    setDraftHover(null)
+    setLineStart(null)
+    setLineCurrent(null)
+
+    // OPTIONAL: if you want Esc to also remove the last shown box overlay:
+    // setLastRegion(null)
+
+    // OPTIONAL: if you want Esc to clear drawn shapes:
+    // setLines([])
+    // setPolygons([])
+  }
+
+  const addProbePoint = (x: number, y: number) => {
+    if (!dataset) return
+
+    addAnnotation({
+      id: crypto.randomUUID(),
+      datasetId: dataset.id,
+      kind: 'probe',
+      type: 'point',
+      createdAt: new Date().toISOString(),
+      geometry: { x, y },
+      label: selectionMode === 'single' ? 'Probe' : 'Probe (multi)',
+      ...(probeGroupId ? { groupId: probeGroupId } : {}),
+    })
+  }
+
+  const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
+    if (verts.length < 3) return
+
+    const imgVerts: ImagePoint[] = []
+    for (const v of verts) {
+      const iv = toImageCoords(v)
+      if (!iv) return
+      imgVerts.push(iv)
+    }
+
+    setPolygons((prev) => [...prev, { vertices: imgVerts }])
+    void (async () => {
+      const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
+      if (!data?.spectra) return
+
+      // keep callback (optional)
+      onRegionSpectra?.(data.spectra)
+
+      // IMPORTANT: add to global selection so Plotly updates (same as other modes)
+      for (const s of data.spectra) {
+        if (s) addSpectrum(s)
+      }
+    })()
 
 
-  setDraftVertices(null)
-  setDraftHover(null)
-  setLineStart(null)
-  setLineCurrent(null)
-}
-
-
-  
+    setDraftVertices(null)
+    setDraftHover(null)
+    setLineStart(null)
+    setLineCurrent(null)
+  }
 
 
 
-  const isBoxMode = selectionMode === 'rect' || selectionMode === 'ellipse'  
-  const isPointMode = selectionMode === 'single' || selectionMode === 'multiple'  
-  const isLineMode = selectionMode === 'line'
-  const isPolygonMode = selectionMode === 'polygon'  
+
+
+
+  const isBoxMode = selectionMode === 'rect' || selectionMode === 'ellipse'
+  const isPointMode = selectionMode === 'single' || selectionMode === 'multiple'
+  const isPolygonLikeMode = selectionMode === 'polygon' || selectionMode === 'line'
+
 
 
   // ---- helper: wrapper coords -> image coords ----
- const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
+  const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
     const img = imgRef.current
     const wrapper = wrapperRef.current
     if (!img || !wrapper) return null
@@ -155,51 +186,51 @@ void (async () => {
   }
 
 
-const fetchSpectraAlongLine = async (p0: ImagePoint, p1: ImagePoint, step = 1) => {
-  if (!dataset) return null
+  const fetchSpectraAlongLine = async (p0: ImagePoint, p1: ImagePoint, step = 1) => {
+    if (!dataset) return null
 
-  const params = new URLSearchParams({
-    x0: p0.x.toString(),
-    y0: p0.y.toString(),
-    x1: p1.x.toString(),
-    y1: p1.y.toString(),
-    step: step.toString(),
-  })
+    const params = new URLSearchParams({
+      x0: p0.x.toString(),
+      y0: p0.y.toString(),
+      x1: p1.x.toString(),
+      y1: p1.y.toString(),
+      step: step.toString(),
+    })
 
-  const res = await fetch(`/api/datasets/${dataset.id}/spectra-line?${params}`)
-  if (!res.ok) {
-    console.error('Failed to fetch line spectra', await res.text())
-    return null
-  }
-  return (await res.json()) as { spectra: Spectrum[] }
-}
-
-const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number) => {
-  if (!dataset) return null
-
-  const res = await fetch(`/api/datasets/${dataset.id}/spectra-polygon`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      vertices,
-      ...(maxPoints !== undefined ? { max_points: maxPoints } : {}),
-    }),
-  })
-
-  if (!res.ok) {
-    console.error('Failed to fetch polygon spectra', await res.text())
-    return null
+    const res = await fetch(`/api/datasets/${dataset.id}/spectra-line?${params}`)
+    if (!res.ok) {
+      console.error('Failed to fetch line spectra', await res.text())
+      return null
+    }
+    return (await res.json()) as { spectra: Spectrum[] }
   }
 
-  return (await res.json()) as {
-    spectra: Spectrum[]
-    truncated?: boolean
-    count?: number
+  const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number) => {
+    if (!dataset) return null
+
+    const res = await fetch(`/api/datasets/${dataset.id}/spectra-polygon`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vertices,
+        ...(maxPoints !== undefined ? { max_points: maxPoints } : {}),
+      }),
+    })
+
+    if (!res.ok) {
+      console.error('Failed to fetch polygon spectra', await res.text())
+      return null
+    }
+
+    return (await res.json()) as {
+      spectra: Spectrum[]
+      truncated?: boolean
+      count?: number
+    }
   }
-}
 
 
-  
+
 
   const fetchSpectrumAtImagePoint = async (xImg: number, yImg: number) => {
     if (!dataset) return null
@@ -216,53 +247,61 @@ const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number)
     }
     return (await res.json()) as Spectrum
   }
-
   const handlePixelClickAtDisplayPoint = async (displayPt: DisplayPoint) => {
     const imgCoords = toImageCoords(displayPt)
-    if (!imgCoords) return
+    if (!imgCoords || !dataset) return
 
+    // fetch spectrum
     const spec = await fetchSpectrumAtImagePoint(imgCoords.x, imgCoords.y)
     if (!spec) return
 
+    // update plot data (existing behavior)
     if (selectionMode === 'single') {
       onSpectrum?.(spec)
     } else {
       addSpectrum(spec)
     }
+
+    // store probe annotation (NEW)
+    if (selectionMode === 'single') {
+      clearProbePointsForDataset(dataset.id)  // ✅ clear old probes
+    }
+    addProbePoint(imgCoords.x, imgCoords.y)   // ✅ save this probe point
   }
+
   const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
-  const img = imgRef.current
-  const wrapper = wrapperRef.current
-  if (!img || !wrapper) return null
+    const img = imgRef.current
+    const wrapper = wrapperRef.current
+    if (!img || !wrapper) return null
 
-  const rect = wrapper.getBoundingClientRect()
-  const scaleX = rect.width / img.naturalWidth
-  const scaleY = rect.height / img.naturalHeight
+    const rect = wrapper.getBoundingClientRect()
+    const scaleX = rect.width / img.naturalWidth
+    const scaleY = rect.height / img.naturalHeight
 
-  return { x: imgPt.x * scaleX, y: imgPt.y * scaleY }
-}
-const hasActiveDraft =
-  dragStart !== null ||
-  draftVertices !== null ||
-  lineStart !== null
-
-useEffect(() => {
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape') return
-    if (!hasActiveDraft) return
-    e.preventDefault()
-
-    setDragStart(null)
-    setDragCurrent(null)
-    setDraftVertices(null)
-    setDraftHover(null)
-    setLineStart(null)
-    setLineCurrent(null)
+    return { x: imgPt.x * scaleX, y: imgPt.y * scaleY }
   }
+  const hasActiveDraft =
+    dragStart !== null ||
+    draftVertices !== null ||
+    lineStart !== null
 
-  window.addEventListener('keydown', onKeyDown)
-  return () => window.removeEventListener('keydown', onKeyDown)
-}, [hasActiveDraft])
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (!hasActiveDraft) return
+      e.preventDefault()
+
+      setDragStart(null)
+      setDragCurrent(null)
+      setDraftVertices(null)
+      setDraftHover(null)
+      setLineStart(null)
+      setLineCurrent(null)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [hasActiveDraft])
 
   // ---- mouse handlers on wrapper ----
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
@@ -282,73 +321,29 @@ useEffect(() => {
       void handlePixelClickAtDisplayPoint(displayPt)
       return
     }
-    else if(isBoxMode){
-       // start drag for rect/ellipse
-    setDragStart(displayPt)
-    setDragCurrent(displayPt)
-    
-    }  else if (isLineMode) {
-  // Start a new draft polyline on first click
-    if (!draftVertices) {
-      setDraftVertices([displayPt])
+    else if (isBoxMode) {
+      // start drag for rect/ellipse
+      setDragStart(displayPt)
+      setDragCurrent(displayPt)
+
+    } 
+
+    else if (isPolygonLikeMode) {
+      if (!draftVertices) {
+        setDraftVertices([displayPt])
+        setDraftHover(displayPt)
+        return
+      }
+
+      if (isCloseToStart(displayPt, draftVertices)) {
+        finalizePolygonFromDraft(draftVertices)
+        return
+      }
+
+      setDraftVertices((prev) => (prev ? [...prev, displayPt] : [displayPt]))
       setDraftHover(displayPt)
-      // for your existing preview line overlay
-      setLineStart(displayPt)
-      setLineCurrent(displayPt)
-    return
-  }
-
-  // If click is near start and we have enough vertices -> close polygon
-  if (isCloseToStart(displayPt, draftVertices)) {
-    finalizePolygonFromDraft(draftVertices)
-    
-    return
-  }
-
-  // Otherwise: add a new segment from last vertex to this click
-  const last = draftVertices[draftVertices.length - 1]
-
-  const startImg = toImageCoords(last)
-  const endImg = toImageCoords(displayPt)
-  if (startImg && endImg) {
-    setLines((prev) => [...prev, { p0: startImg, p1: endImg }])
-  
-  // API call belongs HERE (segment exists here)
-  void (async () => {
-    const data = await fetchSpectraAlongLine(startImg, endImg, 1)
-    if (!data?.spectra) return
-    onRegionSpectra?.(data.spectra)
-    // or addSpectrum(...) if you prefer
-  })()
-  }
-
-  // Append vertex to draft
-  setDraftVertices((prev) => (prev ? [...prev, displayPt] : [displayPt]))
-  setDraftHover(displayPt)
-
-  // keep your preview anchored at new point
-  setLineStart(displayPt)
-  setLineCurrent(displayPt)
-  return
-}
-
-
-   else if (isPolygonMode) {
-  if (!draftVertices) {
-    setDraftVertices([displayPt])
-    setDraftHover(displayPt)
-    return
-  }
-
-  if (isCloseToStart(displayPt, draftVertices)) {
-    finalizePolygonFromDraft(draftVertices)
-    return
-  }
-
-  setDraftVertices((prev) => (prev ? [...prev, displayPt] : [displayPt]))
-  setDraftHover(displayPt)
-  return
-}
+      return
+    }
 
   }
 
@@ -360,34 +355,20 @@ useEffect(() => {
 
     const rect = wrapper.getBoundingClientRect()
     const displayPt: DisplayPoint = {
-    x: e.clientX - rect.left,
-    y: e.clientY - rect.top,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
     }
 
-      // box preview
+    // box preview
     if (isBoxMode && dragStart) {
       setDragCurrent(displayPt)
     }
 
-    // line preview
-    if (isLineMode && lineStart) {
-      setLineCurrent(displayPt)
-    }
-
-    // Draft hover for both line and polygon modes
-if ((isLineMode || isPolygonMode) && draftVertices) {
-  setDraftHover(displayPt)
-}
-
-// Keep your existing line preview line working too (optional)
-if (isLineMode && lineStart) {
-  setLineCurrent(displayPt)
-}
 
   }
 
 
-   
+
 
   const handleMouseUp = async (e: MouseEvent<HTMLDivElement>) => {
     const wrapper = wrapperRef.current
@@ -408,14 +389,59 @@ if (isLineMode && lineStart) {
     const yMinDisp = Math.min(dragStart.y, dragCurrent.y)
     const yMaxDisp = Math.max(dragStart.y, dragCurrent.y)
 
-    
 
-
-
-    
 
     const topLeftImg = toImageCoords({ x: xMinDisp, y: yMinDisp })
     const bottomRightImg = toImageCoords({ x: xMaxDisp, y: yMaxDisp })
+
+    if (!topLeftImg || !bottomRightImg) {
+      setDragStart(null)
+      setDragCurrent(null)
+      return
+    }
+
+    const x = Math.min(topLeftImg.x, bottomRightImg.x)
+    const y = Math.min(topLeftImg.y, bottomRightImg.y)
+    const w = Math.abs(bottomRightImg.x - topLeftImg.x)
+    const h = Math.abs(bottomRightImg.y - topLeftImg.y)
+
+
+    const MIN_SIZE = 3
+    if (w >= MIN_SIZE && h >= MIN_SIZE) {
+      if (selectionMode === 'rect') {
+        const ann: RectAnn = {
+          id: crypto.randomUUID(),
+          datasetId: dataset.id,
+          kind: 'roi',
+          type: 'rect',
+          createdAt: new Date().toISOString(),
+          geometry: { x, y, w, h },
+          label: 'ROI',
+        }
+
+        addAnnotation(ann)
+      }
+
+      if (selectionMode === 'ellipse') {
+        const ann: EllipseAnn = {
+          id: crypto.randomUUID(),
+          datasetId: dataset.id,
+          kind: 'roi',
+          type: 'ellipse',
+          createdAt: new Date().toISOString(),
+          geometry: {
+            cx: x + w / 2,
+            cy: y + h / 2,
+            rx: w / 2,
+            ry: h / 2,
+          },
+          label: 'ROI',
+        }
+        addAnnotation(ann)
+      }
+
+    }
+
 
     if (!topLeftImg || !bottomRightImg) {
       setDragStart(null)
@@ -467,126 +493,210 @@ if (isLineMode && lineStart) {
 
   let polygonOverlay: JSX.Element | null = null
 
+  const activeBox =
+    isBoxMode && dragStart && dragCurrent
+      ? {
+        left: Math.min(dragStart.x, dragCurrent.x),
+        top: Math.min(dragStart.y, dragCurrent.y),
+        width: Math.abs(dragCurrent.x - dragStart.x),
+        height: Math.abs(dragCurrent.y - dragStart.y),
+      }
+      : null
+
+  if (activeBox) {
+    selectionOverlay = (
+      <svg
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+        }}
+      >
+        {selectionMode === 'rect' ? (
+          <rect
+            x={activeBox.left}
+            y={activeBox.top}
+            width={activeBox.width}
+            height={activeBox.height}
+            fill="rgba(255,0,0,0.08)"
+            stroke="red"
+            strokeWidth={2}
+          />
+        ) : (
+          <ellipse
+            cx={activeBox.left + activeBox.width / 2}
+            cy={activeBox.top + activeBox.height / 2}
+            rx={activeBox.width / 2}
+            ry={activeBox.height / 2}
+            fill="rgba(255,0,0,0.08)"
+            stroke="red"
+            strokeWidth={2}
+          />
+        )}
+      </svg>
+    )
+  }
+
+
+  const savedOverlay = (
+    <svg
+      style={{
+        position: 'absolute',
+        inset: 0,
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+      }}
+    >
+      {annotations
+        .filter(a => dataset && a.datasetId === dataset.id)
+        .map(a => {
+          if (a.type === 'rect') {
+            const p0 = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
+            const p1 = toDisplayCoords({ x: a.geometry.x + a.geometry.w, y: a.geometry.y + a.geometry.h })
+            if (!p0 || !p1) return null
+
+            const left = Math.min(p0.x, p1.x)
+            const top = Math.min(p0.y, p1.y)
+            const width = Math.abs(p1.x - p0.x)
+            const height = Math.abs(p1.y - p0.y)
+
+            return (
+              <rect
+                key={a.id}
+                x={left}
+                y={top}
+                width={width}
+                height={height}
+                fill="rgba(255,0,0,0.12)"
+                stroke="red"
+                strokeWidth={2}
+              />
+            )
+          }
+          if (a.kind === 'probe' && a.type === 'point') {
+            const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
+            if (!p) return null
+
+            return (
+              <circle
+                key={a.id}
+                cx={p.x}
+                cy={p.y}
+                r={5}
+                fill="white"
+                stroke="lime"
+                strokeWidth={2}
+              />
+            )
+          }
+
+
+          if (a.type === 'ellipse') {
+            const c = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy })
+            const rxPt = toDisplayCoords({ x: a.geometry.cx + a.geometry.rx, y: a.geometry.cy })
+            const ryPt = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy + a.geometry.ry })
+            if (!c || !rxPt || !ryPt) return null
+
+            const rx = Math.abs(rxPt.x - c.x)
+            const ry = Math.abs(ryPt.y - c.y)
+
+            return (
+              <ellipse
+                key={a.id}
+                cx={c.x}
+                cy={c.y}
+                rx={rx}
+                ry={ry}
+                fill="rgba(255,0,0,0.10)"
+                stroke="red"
+                strokeWidth={2}
+              />
+            )
+          }
+
+          return null
+        })}
+    </svg>
+  )
 
   if (polygons.length > 0 || (draftVertices && draftVertices.length > 0)) {
-  polygonOverlay = (
-    <svg
-      style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none',
-      }}
-    >
-      {/* finished polygons */}
-      {polygons.map((poly, idx) => {
-        const pts = poly.vertices
-          .map(toDisplayCoords)
-          .filter((p): p is DisplayPoint => !!p)
-          .map((p) => `${p.x},${p.y}`)
-          .join(' ')
+    polygonOverlay = (
+      <svg
+        style={{
+          position: 'absolute',
+          inset: 0,
+          left: 0,
+          top: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+        }}
+      >
+        {/* finished polygons */}
+        {polygons.map((poly, idx) => {
+          const pts = poly.vertices
+            .map(toDisplayCoords)
+            .filter((p): p is DisplayPoint => !!p)
+            .map((p) => `${p.x},${p.y}`)
+            .join(' ')
 
-        if (!pts) return null
+          if (!pts) return null
 
-        return (
-          <polygon
-            key={idx}
-            points={pts}
-            fill="rgba(255,0,0,0.12)"
-            stroke="red"
-            strokeWidth={2}
-          />
-        )
-      })}
-
-      {/* draft polyline (in-progress) */}
-      {draftVertices && draftVertices.length > 0 && (
-        <>
-          {/* polyline through fixed vertices */}
-          <polyline
-            points={draftVertices.map((p) => `${p.x},${p.y}`).join(' ')}
-            fill="none"
-            stroke="red"
-            strokeWidth={2}
-          />
-
-          {/* preview edge to cursor */}
-          {draftHover && (
-            <line
-              x1={draftVertices[draftVertices.length - 1].x}
-              y1={draftVertices[draftVertices.length - 1].y}
-              x2={draftHover.x}
-              y2={draftHover.y}
+          return (
+            <polygon
+              key={idx}
+              points={pts}
+              fill="rgba(255,0,0,0.12)"
               stroke="red"
               strokeWidth={2}
-              strokeDasharray="4,4"
             />
-          )}
+          )
+        })}
 
-          {/* start vertex handle (click to close) */}
-          <circle
-            cx={draftVertices[0].x}
-            cy={draftVertices[0].y}
-            r={6}
-            fill="white"
-            stroke="red"
-            strokeWidth={2}
-          />
-        </>
-      )}
-    </svg>
-  )
-}
+        {/* draft polyline (in-progress) */}
+        {draftVertices && draftVertices.length > 0 && (
+          <>
+            {/* polyline through fixed vertices */}
+            <polyline
+              points={draftVertices.map((p) => `${p.x},${p.y}`).join(' ')}
+              fill="none"
+              stroke="red"
+              strokeWidth={2}
+            />
 
+            {/* preview edge to cursor */}
+            {draftHover && (
+              <line
+                x1={draftVertices[draftVertices.length - 1].x}
+                y1={draftVertices[draftVertices.length - 1].y}
+                x2={draftHover.x}
+                y2={draftHover.y}
+                stroke="red"
+                strokeWidth={2}
+                strokeDasharray="4,4"
+              />
+            )}
 
-if ((isLineMode && lineStart && lineCurrent) || lines.length > 0) {
-  lineOverlay = (
-    <svg
-      style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none',
-      }}
-    >
-      {/* preview line */}
-      {isLineMode && lineStart && lineCurrent && (
-        <line
-          x1={lineStart.x}
-          y1={lineStart.y}
-          x2={lineCurrent.x}
-          y2={lineCurrent.y}
-          stroke="red"
-          strokeWidth={2}
-          strokeDasharray="4,4"
-        />
-      )}
+            {/* start vertex handle (click to close) */}
+            <circle
+              cx={draftVertices[0].x}
+              cy={draftVertices[0].y}
+              r={6}
+              fill="white"
+              stroke="red"
+              strokeWidth={2}
+            />
+          </>
+        )}
+      </svg>
+    )
+  }
 
-      {/* stored lines */}
-      {lines.map((line, idx) => {
-        const p0 = toDisplayCoords(line.p0)
-        const p1 = toDisplayCoords(line.p1)
-        if (!p0 || !p1) return null
-
-        return (
-          <line
-            key={idx}
-            x1={p0.x}
-            y1={p0.y}
-            x2={p1.x}
-            y2={p1.y}
-            stroke="red"
-            strokeWidth={2}
-          />
-        )
-      })}
-    </svg>
-  )
-}
 
 
   if (dragStart && dragCurrent && isBoxMode) {
@@ -597,10 +707,9 @@ if ((isLineMode && lineStart && lineCurrent) || lines.length > 0) {
 
     selectionOverlay = (
       <div
-        className={`selection-overlay ${
-          selectionMode === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
-        }`}
-        style={{ left, top, width, height,  border: '2px solid red' }}
+        className={`selection-overlay ${selectionMode === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
+          }`}
+        style={{ left, top, width, height, border: '2px solid red' }}
       />
     )
   } else if (lastRegion) {
@@ -612,10 +721,9 @@ if ((isLineMode && lineStart && lineCurrent) || lines.length > 0) {
 
     selectionOverlay = (
       <div
-        className={`selection-overlay ${
-          shape === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
-        }`}
-        style={{ left, top, width, height,  border: '2px solid red' }}
+        className={`selection-overlay ${shape === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
+          }`}
+        style={{ left, top, width, height, border: '2px solid red' }}
       />
     )
   }
@@ -629,7 +737,7 @@ if ((isLineMode && lineStart && lineCurrent) || lines.length > 0) {
           style={{
             position: 'relative',
             width: '100%',
-            display: 'inline-block',
+            overflow: 'hidden',
             userSelect: 'none',
           }}
           onMouseDown={handleMouseDown}
@@ -639,55 +747,24 @@ if ((isLineMode && lineStart && lineCurrent) || lines.length > 0) {
           <img
             ref={imgRef}
             src={rgbImgUrl}
-            alt={`Hyperspectral Image${
-              dataset ? `– ${dataset.name}` : ''
-            }`}
+            alt={`Hyperspectral Image${dataset ? `– ${dataset.name}` : ''
+              }`}
             style={{
               width: '100%',
               height: 'auto',
               display: 'block',
-        cursor: (isBoxMode || isLineMode || isPolygonMode) ? 'crosshair' : 'pointer',
+              cursor: (isBoxMode || isPolygonLikeMode) ? 'crosshair' : 'pointer',
             }}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
           />
-
-          {/* shape overlay */}
+          {savedOverlay}
           {selectionOverlay}
           {polygonOverlay}
-         {/* line overlay */}
           {lineOverlay}
 
 
-          {/* pixel markers */}
-          {/* pixel markers */}
-{isPointMode &&
-  imgRef.current &&
-  selectedSpectra
-    ?.filter((s): s is NonNullSpectrum => s !== null)
-    .map((s, idx) => {
-      const img = imgRef.current
-      const leftPct = ((s.x + 0.5) / img.naturalWidth) * 100
-      const topPct = ((s.y + 0.5) / img.naturalHeight) * 100
 
-      return (
-        <div
-          key={idx}
-          style={{
-            position: 'absolute',
-            left: `${leftPct}%`,
-            top: `${topPct}%`,
-            transform: 'translate(-50%, -50%)',
-            width: '10px',
-            height: '10px',
-            borderRadius: '50%',
-            border: '2px solid red',
-            boxShadow: '0 0 4px rgba(0,0,0,0.6)',
-            pointerEvents: 'none',
-          }}
-        />
-      )
-    })}
 
         </div>
       ) : (

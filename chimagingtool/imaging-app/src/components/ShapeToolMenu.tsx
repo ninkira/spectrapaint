@@ -65,7 +65,7 @@ const ShapeToolMenu: React.FC = () => {
             onClick={() => handleSelect('line')}
           >
             <Waypoints size={16} color={ICON_COLOR} />
-            <span>Line</span>
+            <span>Polyline</span>
           </button>
         </div>
       )}

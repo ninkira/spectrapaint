@@ -2,6 +2,8 @@ import React, {createContext, useContext, useEffect, useMemo, useState} from 're
 import { listDatasets, rgbUrl } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
+import { useCallback } from 'react'
+
 
 type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' |  'polygon' 
 
@@ -34,6 +36,7 @@ type Ctx = {
   annotations: Annotation[]
   addAnnotation: (a: Annotation) => void
   removeAnnotation: (id: string) => void
+  clearProbePointsForDataset: (datasetId: string) => void
 };
 
 const Ctx = createContext<Ctx>(null as any);
@@ -50,11 +53,20 @@ export function AppProvider({children}:{children:React.ReactNode}) {
 // Annotations - based on selected ROI
     const [annotations, setAnnotations] = useState<Annotation[]>([])
 
-  const addAnnotation = (a: Annotation) =>
-    setAnnotations(prev => [...prev, a])
+ const addAnnotation = useCallback((a: Annotation) => {
+  setAnnotations(prev => [...prev, a])
+}, [])
 
-  const removeAnnotation = (id: string) =>
-    setAnnotations(prev => prev.filter(a => a.id !== id))
+const removeAnnotation = useCallback((id: string) => {
+  setAnnotations(prev => prev.filter(a => a.id !== id))
+}, [])
+
+const clearProbePointsForDataset = useCallback((datasetId: string) => {
+  setAnnotations(prev =>
+    prev.filter(a => !(a.datasetId === datasetId && a.kind === 'probe' && a.type === 'point'))
+  )
+}, [])
+
 
 // Select the annotation / ROI
   const toggleLayer = (id:string) => setLayers(ls => ls.map(l => l.id===id ? {...l,on:!l.on}: l));
@@ -115,6 +127,7 @@ const ctxValue: Ctx = useMemo(() => ({
   annotations,
   addAnnotation,
   removeAnnotation,
+  clearProbePointsForDataset,
 }), [
   layers,
   dataset,
@@ -124,6 +137,7 @@ const ctxValue: Ctx = useMemo(() => ({
   selectionMode,
   selectedSpectra,
   annotations,
+  clearProbePointsForDataset,
 ])
 
 return (
