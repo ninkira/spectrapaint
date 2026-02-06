@@ -30,10 +30,9 @@ export default function PrimaryDisplay({
     annotations,
     addAnnotation,
     clearProbePointsForDataset,
-    selectedRoiId, 
-    roiSpectraById, 
+    selectedRoiId,
     setRoiSpectraForId,
-    setSelectedRoiId,   
+    setSelectedRoiId,
   } = useApp()
 
   const show = layers.find((l) => l.id === 'rgb')?.on
@@ -142,7 +141,7 @@ export default function PrimaryDisplay({
 
       }
 
-      
+
 
 
       setRoiSpectraForId(ann.id, data.spectra)
@@ -386,9 +385,10 @@ export default function PrimaryDisplay({
 
 
     const MIN_SIZE = 3
+    let ann: RectAnn | EllipseAnn | null = null
     if (w >= MIN_SIZE && h >= MIN_SIZE) {
       if (selectionMode === 'rect') {
-        const ann: RectAnn = {
+        ann = {
           id: crypto.randomUUID(),
           datasetId: dataset.id,
           kind: 'roi',
@@ -397,12 +397,10 @@ export default function PrimaryDisplay({
           geometry: { x, y, w, h },
           label: 'ROI',
         }
-
-        addAnnotation(ann)
       }
 
       if (selectionMode === 'ellipse') {
-        const ann: EllipseAnn = {
+        ann = {
           id: crypto.randomUUID(),
           datasetId: dataset.id,
           kind: 'roi',
@@ -416,9 +414,9 @@ export default function PrimaryDisplay({
           },
           label: 'ROI',
         }
-        addAnnotation(ann)
-      }
 
+      }
+      if (ann) addAnnotation(ann)
     }
 
 
@@ -446,6 +444,12 @@ export default function PrimaryDisplay({
 
         if (onRegionSpectra && Array.isArray(data.spectra)) {
           onRegionSpectra(data.spectra)
+        }
+        if (ann && Array.isArray(data.spectra)) {
+          setRoiSpectraForId(ann.id, data.spectra)
+          setSelectedRoiId(ann.id)
+
+
         }
       }
     } catch (err) {
@@ -479,7 +483,7 @@ export default function PrimaryDisplay({
           inset: 0,
           width: '100%',
           height: '100%',
-          pointerEvents: 'auto',
+          pointerEvents: 'none',
         }}
       >
         {selectionMode === 'rect' ? (
@@ -567,6 +571,7 @@ export default function PrimaryDisplay({
                 strokeWidth={a.id === selectedRoiId ? 3 : 2}
                 onClick={() => setSelectedRoiId(a.id)}
                 style={{ cursor: 'pointer' }}
+
               />
             )
           }
@@ -582,8 +587,9 @@ export default function PrimaryDisplay({
                 cy={p.y}
                 r={5}
                 fill="white"
-                stroke="lime"
-                strokeWidth={2}
+                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedRoiId ? 3 : 2}
+
               />
             )
           }
@@ -629,7 +635,7 @@ export default function PrimaryDisplay({
           top: 0,
           width: '100%',
           height: '100%',
-          pointerEvents: 'auto',
+          pointerEvents: 'none',
         }}
       >
         {/* finished polygons */}

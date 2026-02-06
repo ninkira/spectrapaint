@@ -163,6 +163,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     selectedSpectra,
     annotations,
     clearProbePointsForDataset,
+    selectedRoiId,
+    roiSpectraById,
+    setSelectedRoiId,
+    setRoiSpectraForId,
   ])
 
   return (
