@@ -1,5 +1,5 @@
-// components/PigmentClassification.tsx
-import React from 'react'
+// imaging-app/src/components/hsi_tools/PigmentClassification.tsx
+import React, { useState } from 'react'
 
 interface PigmentClassificationModalProps {
   isOpen: boolean
@@ -14,7 +14,14 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
   onClose,
   children,
 }) => {
+  const [value, setValue] = useState('')
+
   if (!isOpen) return null
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault()
+    alert('A name was submitted: ' + value)
+  }
 
   return (
     <div
@@ -36,7 +43,8 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
         style={{
           background: 'white',
           minWidth: '320px',
-          maxWidth: '600px',
+          maxWidth: '900px',
+          width: '90vw',
           maxHeight: '80vh',
           borderRadius: '8px',
           boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
@@ -62,8 +70,46 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
           </button>
         </div>
 
-        {/* ✅ Render modal content */}
-        {children}
+        <div
+          style={{
+            display: 'flex',
+            gap: '1.25rem',
+            alignItems: 'stretch',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ flex: '1 1 320px', minWidth: '260px' }}>{children}</div>
+          <form
+            onSubmit={handleSubmit}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem',
+              flex: '1 1 320px',
+              minWidth: '260px',
+            }}
+          >
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              Preprocessing Method
+              <select defaultValue="coconut">
+                <option value="grapefruit">Grapefruit</option>
+                <option value="lime">Lime</option>
+                <option value="coconut">Coconut</option>
+                <option value="mango">Mango</option>
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              Classification Method
+              <select defaultValue="coconut">
+                <option value="grapefruit">Grapefruit</option>
+                <option value="lime">Lime</option>
+                <option value="coconut">Coconut</option>
+                <option value="mango">Mango</option>
+              </select>
+            </label>
+            <input type="submit" value="Submit" />
+          </form>
+        </div>
       </div>
     </div>
   )
