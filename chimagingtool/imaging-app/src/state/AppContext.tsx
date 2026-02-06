@@ -1,11 +1,11 @@
-import React, {createContext, useContext, useEffect, useMemo, useState} from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { listDatasets, rgbUrl } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import { useCallback } from 'react'
 
 
-type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' |  'polygon' 
+type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' | 'polygon'
 
 
 type Ctx = {
@@ -32,49 +32,56 @@ type Ctx = {
   addSpectrum: (s: Spectrum) => void;
   clearSpectra: () => void;
 
-   // Annotations 
+  // Annotations 
   annotations: Annotation[]
   addAnnotation: (a: Annotation) => void
   removeAnnotation: (id: string) => void
   clearProbePointsForDataset: (datasetId: string) => void
+
+  // selected ROI
+  selectedRoiId: string | null
+  setSelectedRoiId: (id: string | null) => void
+  roiSpectraById: Record<string, Spectrum[]>
+  setRoiSpectraForId: (id: string, spectra: Spectrum[]) => void
+
 };
 
 const Ctx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(Ctx);
 
-export function AppProvider({children}:{children:React.ReactNode}) {
-  const [layers, setLayers] = useState<Layer[]>([{ id:'rgb', name:'Hyperspectral Image', on:true }]);
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [layers, setLayers] = useState<Layer[]>([{ id: 'rgb', name: 'Hyperspectral Image', on: true }]);
   const [datasets, setDatasets] = useState<DatasetMeta[]>([]);
   const [datasetId, setDatasetId] = useState<string>();
   const [dataset, setDataset] = useState<DatasetMeta>();
   const [rgbBands, setRgbBandsState] = useState({ r: 650, g: 550, b: 450 });
   const [rgbImgUrl, setRgbImgUrl] = useState<string>();
 
-// Annotations - based on selected ROI
-    const [annotations, setAnnotations] = useState<Annotation[]>([])
+  // Annotations - based on selected ROI
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
 
- const addAnnotation = useCallback((a: Annotation) => {
-  setAnnotations(prev => [...prev, a])
-}, [])
+  const addAnnotation = useCallback((a: Annotation) => {
+    setAnnotations(prev => [...prev, a])
+  }, [])
 
-const removeAnnotation = useCallback((id: string) => {
-  setAnnotations(prev => prev.filter(a => a.id !== id))
-}, [])
+  const removeAnnotation = useCallback((id: string) => {
+    setAnnotations(prev => prev.filter(a => a.id !== id))
+  }, [])
 
-const clearProbePointsForDataset = useCallback((datasetId: string) => {
-  setAnnotations(prev =>
-    prev.filter(a => !(a.datasetId === datasetId && a.kind === 'probe' && a.type === 'point'))
-  )
-}, [])
+  const clearProbePointsForDataset = useCallback((datasetId: string) => {
+    setAnnotations(prev =>
+      prev.filter(a => !(a.datasetId === datasetId && a.kind === 'probe' && a.type === 'point'))
+    )
+  }, [])
 
 
-// Select the annotation / ROI
-  const toggleLayer = (id:string) => setLayers(ls => ls.map(l => l.id===id ? {...l,on:!l.on}: l));
+  // Select the annotation / ROI
+  const toggleLayer = (id: string) => setLayers(ls => ls.map(l => l.id === id ? { ...l, on: !l.on } : l));
 
   // new for selection one or multiple pixels in the image
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
 
-  
+
 
   const [selectedSpectra, setSelectedSpectra] = useState<Spectrum[]>([]);
 
@@ -83,11 +90,22 @@ const clearProbePointsForDataset = useCallback((datasetId: string) => {
 
   const clearSpectra = () => setSelectedSpectra([]);
 
+  // selected ROI
+  const [selectedRoiId, setSelectedRoiId] = useState<string | null>(null)
+  const [roiSpectraById, setRoiSpectraById] = useState<Record<string, Spectrum[]>>({})
 
-  useEffect(() => { listDatasets().then(ds => {
-    setDatasets(ds);
-    if (ds.length) { setDataset(ds[0]); setDatasetId(ds[0].id); }
-  }).catch(console.error); }, []);
+
+  const setRoiSpectraForId = (id: string, spectra: Spectrum[]) => {
+    setRoiSpectraById(prev => ({ ...prev, [id]: spectra }))
+  }
+
+
+  useEffect(() => {
+    listDatasets().then(ds => {
+      setDatasets(ds);
+      if (ds.length) { setDataset(ds[0]); setDatasetId(ds[0].id); }
+    }).catch(console.error);
+  }, []);
 
   useEffect(() => {
     if (!datasetId) return;
@@ -98,51 +116,58 @@ const clearProbePointsForDataset = useCallback((datasetId: string) => {
     setRgbImgUrl(u);
   }, [datasetId, datasets, rgbBands]);
 
-const ctxValue: Ctx = useMemo(() => ({
-  // Layers
-  layers,
-  toggleLayer,
+  const ctxValue: Ctx = useMemo(() => ({
+    // Layers
+    layers,
+    toggleLayer,
 
-  // Dataset
-  dataset,
-  datasetId,
-  setDatasetId,
+    // Dataset
+    dataset,
+    datasetId,
+    setDatasetId,
 
-  // RGB
-  rgbBands,
-  setRgbBands: (r: number, g: number, b: number) =>
-    setRgbBandsState({ r, g, b }),
-  rgbImgUrl,
+    // RGB
+    rgbBands,
+    setRgbBands: (r: number, g: number, b: number) =>
+      setRgbBandsState({ r, g, b }),
+    rgbImgUrl,
 
-  // Selection
-  selectionMode,
-  setSelectionMode,
+    // Selection
+    selectionMode,
+    setSelectionMode,
 
-  // Spectra
-  selectedSpectra,
-  addSpectrum,
-  clearSpectra,
+    // Spectra
+    selectedSpectra,
+    addSpectrum,
+    clearSpectra,
 
-  // Annotations
-  annotations,
-  addAnnotation,
-  removeAnnotation,
-  clearProbePointsForDataset,
-}), [
-  layers,
-  dataset,
-  datasetId,
-  rgbBands,
-  rgbImgUrl,
-  selectionMode,
-  selectedSpectra,
-  annotations,
-  clearProbePointsForDataset,
-])
+    // Annotations
+    annotations,
+    addAnnotation,
+    removeAnnotation,
+    clearProbePointsForDataset,
 
-return (
-  <Ctx.Provider value={ctxValue}>
-    {children}
-  </Ctx.Provider>
-)
+    // selected ROI
+    selectedRoiId,
+    setSelectedRoiId,
+    roiSpectraById,
+    setRoiSpectraForId,
+
+  }), [
+    layers,
+    dataset,
+    datasetId,
+    rgbBands,
+    rgbImgUrl,
+    selectionMode,
+    selectedSpectra,
+    annotations,
+    clearProbePointsForDataset,
+  ])
+
+  return (
+    <Ctx.Provider value={ctxValue}>
+      {children}
+    </Ctx.Provider>
+  )
 }

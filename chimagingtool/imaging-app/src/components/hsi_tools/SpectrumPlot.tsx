@@ -10,37 +10,37 @@ export type Spectrum = {
 } | null
 
 interface SpectrumPlotProps {
-  spectrum: Spectrum
+  spectra: Spectrum[]
 }
 
-const SpectrumPlot: React.FC<SpectrumPlotProps> = ({ spectrum }) => {
-  if (!spectrum) {
+const SpectrumPlot: React.FC<SpectrumPlotProps> = ({ spectra }) => {
+  if (!spectra) {
     return (
       <div style={{ padding: '1rem', color: '#666' }}>
-        Click on the image to see a spectrum.
+        Click on the image or ROI to see a spectrum.
       </div>
     )
   }
 
-  const { wavelengths_nm, values, x, y } = spectrum
-
-  const baseTrace: Data = {
-    x: wavelengths_nm,
-    y: values,
+  const data: Data[] = spectra
+  .filter((s): s is Exclude<Spectrum, null> => !!s)
+  .map((s) => ({
+    x: s.wavelengths_nm,
+    y: s.values,
     type: 'scatter',
-    mode: 'lines+markers',
-    name: `Pixel (${x}, ${y})`,
-  }
+    mode: 'lines',
+    name: `Pixel (${s.x}, ${s.y})`,
+  }))
 
-  const data: Data[] = [baseTrace]
 
   const layout: Partial<Layout> = {
-    autosize: true,
-    margin: { l: 50, r: 20, t: 40, b: 50 },
-    title: { text: `Spectrum at pixel (x=${x}, y=${y})` },
-    xaxis: { title: { text: 'Wavelength (nm)' } },
-    yaxis: { title: { text: 'Intensity / Reflectance' } },
-  }
+  autosize: true,
+  margin: { l: 50, r: 20, t: 40, b: 50 },
+  title: { text: `Spectra in selected ROI` },
+  xaxis: { title: { text: 'Wavelength (nm)' } },
+  yaxis: { title: { text: 'Intensity / Reflectance' } },
+}
+
 
   return (
     <div>

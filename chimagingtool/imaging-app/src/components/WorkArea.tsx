@@ -9,7 +9,7 @@ import DatasetInfo from './Dataset/DatasetInfo'
 import PigmentClassificationModal from './hsi_tools/PigmentClassification'
 
 export default function WorkArea() {
-    const { selectionMode, selectedSpectra, dataset } = useApp()
+    const { selectionMode, dataset,  selectedRoiId, roiSpectraById  } = useApp()
 
   const [spectrum, setSpectrum] = useState<Spectrum>(null)
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
@@ -20,10 +20,13 @@ export default function WorkArea() {
   const isMultiPixelMode =
     selectionMode === 'multiple' || selectionMode === 'line'
 
+  const selectedSpectra =  selectedRoiId ? roiSpectraById[selectedRoiId] ?? [] : []
+
+
   let plot: React.ReactNode = null
 
   if (selectionMode === 'single') {
-    plot = <SpectrumPlot spectrum={spectrum} />
+    plot = <SpectrumPlot spectra={selectedSpectra} />
   } else if (isMultiPixelMode) {
     plot = (
       <MultiSpectrumPlot
@@ -35,7 +38,7 @@ export default function WorkArea() {
   } else if (isRegionMode) {
     plot = (
       <MultiSpectrumPlot
-        spectra={regionSpectra}
+        spectra={selectedSpectra}
         title="Region spectra (rectangle / ellipse)"
         emptyMessage="Drag a rectangle or ellipse on the image to select a region."
       />

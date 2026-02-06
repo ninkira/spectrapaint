@@ -30,6 +30,10 @@ export default function PrimaryDisplay({
     annotations,
     addAnnotation,
     clearProbePointsForDataset,
+    selectedRoiId, 
+    roiSpectraById, 
+    setRoiSpectraForId,
+    setSelectedRoiId,   
   } = useApp()
 
   const show = layers.find((l) => l.id === 'rgb')?.on
@@ -98,6 +102,7 @@ export default function PrimaryDisplay({
   }
 
   const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
+    if (!dataset) return
     if (verts.length < 3) return
 
     const imgVerts: ImagePoint[] = []
@@ -108,18 +113,6 @@ export default function PrimaryDisplay({
     }
 
     setPolygons((prev) => [...prev, { vertices: imgVerts }])
-    void (async () => {
-      const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
-      if (!data?.spectra) return
-
-      // keep callback (optional)
-      onRegionSpectra?.(data.spectra)
-
-      // IMPORTANT: add to global selection so Plotly updates (same as other modes)
-      for (const s of data.spectra) {
-        if (s) addSpectrum(s)
-      }
-    })()
 
     const ann: PolygonAnn = {
       id: crypto.randomUUID(),
@@ -133,8 +126,33 @@ export default function PrimaryDisplay({
 
     addAnnotation(ann)
 
+    void (async () => {
+      const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
+
+      if (!data?.spectra) return
+
+
+
+      // keep callback (optional)
+      onRegionSpectra?.(data.spectra)
+
+      // IMPORTANT: add to global selection so Plotly updates (same as other modes)
+      for (const s of data.spectra) {
+        if (s) addSpectrum(s)
+
+      }
+
+      
+
+
+      setRoiSpectraForId(ann.id, data.spectra)
+      setSelectedRoiId(ann.id)
+
+    })()
+
     setDraftVertices(null)
     setDraftHover(null)
+
   }
 
 
@@ -461,7 +479,7 @@ export default function PrimaryDisplay({
           inset: 0,
           width: '100%',
           height: '100%',
-          pointerEvents: 'none',
+          pointerEvents: 'auto',
         }}
       >
         {selectionMode === 'rect' ? (
@@ -499,7 +517,7 @@ export default function PrimaryDisplay({
         top: 0,
         width: '100%',
         height: '100%',
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
       }}
     >
       {annotations
@@ -523,8 +541,10 @@ export default function PrimaryDisplay({
                 width={width}
                 height={height}
                 fill="rgba(255,0,0,0.12)"
-                stroke="red"
-                strokeWidth={2}
+                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedRoiId ? 3 : 2}
+                onClick={() => setSelectedRoiId(a.id)}
+                style={{ cursor: 'pointer' }}
               />
             )
           }
@@ -543,8 +563,10 @@ export default function PrimaryDisplay({
                 key={a.id}
                 points={pts}
                 fill="rgba(255,0,0,0.12)"
-                stroke="red"
-                strokeWidth={2}
+                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedRoiId ? 3 : 2}
+                onClick={() => setSelectedRoiId(a.id)}
+                style={{ cursor: 'pointer' }}
               />
             )
           }
@@ -584,8 +606,10 @@ export default function PrimaryDisplay({
                 rx={rx}
                 ry={ry}
                 fill="rgba(255,0,0,0.10)"
-                stroke="red"
-                strokeWidth={2}
+                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedRoiId ? 3 : 2}
+                onClick={() => setSelectedRoiId(a.id)}
+                style={{ cursor: 'pointer' }}
               />
             )
           }
@@ -605,7 +629,7 @@ export default function PrimaryDisplay({
           top: 0,
           width: '100%',
           height: '100%',
-          pointerEvents: 'none',
+          pointerEvents: 'auto',
         }}
       >
         {/* finished polygons */}
@@ -702,7 +726,7 @@ export default function PrimaryDisplay({
           {savedOverlay}
           {selectionOverlay}
           {polygonOverlay}
- 
+
 
 
 

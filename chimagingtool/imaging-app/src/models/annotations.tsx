@@ -22,7 +22,7 @@ export type RectAnn = AnnotationBase & {
 export type PolygonAnn = AnnotationBase & {
     kind: 'roi'
     type: 'polygon'
-    geometry: {points: Point2D[]}
+    geometry: {vertices: Point2D[]}
 }
 
 export type EllipseAnn = AnnotationBase & {
