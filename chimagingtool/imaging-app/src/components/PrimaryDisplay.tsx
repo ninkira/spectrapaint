@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
-import type { Annotation, RectAnn, EllipseAnn, LineAnn, PolygonAnn } from '../models/annotations'
+import type { RectAnn, EllipseAnn, PolygonAnn } from '../models/annotations'
 
 interface PrimaryDisplayProps {
   onSpectrum?: (s: Spectrum) => void
@@ -11,24 +11,11 @@ interface PrimaryDisplayProps {
 }
 
 
-/* types for selection forms and shapes */
-type NonNullSpectrum = Exclude<Spectrum, null>
 type DisplayPoint = { x: number; y: number } /* Image Render Coord */
 type ImagePoint = { x: number; y: number } /* Actual HSI Coors */
 
-
-type Line = { p0: ImagePoint; p1: ImagePoint }
 type Polygon = { vertices: ImagePoint[] }
 
-
-
-type RegionOverlay = {
-  x0: number
-  y0: number
-  x1: number
-  y1: number
-  shape: 'rect' | 'ellipse'
-}
 
 export default function PrimaryDisplay({
   onSpectrum,
@@ -40,7 +27,6 @@ export default function PrimaryDisplay({
     addSpectrum,
     rgbImgUrl,
     dataset,
-    selectedSpectra,
     annotations,
     addAnnotation,
     clearProbePointsForDataset,
@@ -53,15 +39,7 @@ export default function PrimaryDisplay({
   const [dragStart, setDragStart] = useState<DisplayPoint | null>(null)
   const [dragCurrent, setDragCurrent] = useState<DisplayPoint | null>(null)
 
-  /* Lines */
-  const [lines, setLines] = useState<Line[]>([])
-  const [lineStart, setLineStart] = useState<DisplayPoint | null>(null)
-  const [lineCurrent, setLineCurrent] = useState<DisplayPoint | null>(null)
-
-
   const [polygons, setPolygons] = useState<Polygon[]>([]) /* if lines are connected */
-  /* Overlay */
-  const [lastRegion, setLastRegion] = useState<RegionOverlay | null>(null)
 
   // Draft polyline vertices while drawing (Display space)
   const [draftVertices, setDraftVertices] = useState<DisplayPoint[] | null>(null)
@@ -101,15 +79,7 @@ export default function PrimaryDisplay({
     // cancel line/poly drafting
     setDraftVertices(null)
     setDraftHover(null)
-    setLineStart(null)
-    setLineCurrent(null)
 
-    // OPTIONAL: if you want Esc to also remove the last shown box overlay:
-    // setLastRegion(null)
-
-    // OPTIONAL: if you want Esc to clear drawn shapes:
-    // setLines([])
-    // setPolygons([])
   }
 
   const addProbePoint = (x: number, y: number) => {
@@ -151,11 +121,20 @@ export default function PrimaryDisplay({
       }
     })()
 
+    const ann: PolygonAnn = {
+      id: crypto.randomUUID(),
+      datasetId: dataset.id,
+      kind: 'roi',
+      type: 'polygon',
+      createdAt: new Date().toISOString(),
+      geometry: { vertices: imgVerts },
+      label: 'ROI',
+    }
+
+    addAnnotation(ann)
 
     setDraftVertices(null)
     setDraftHover(null)
-    setLineStart(null)
-    setLineCurrent(null)
   }
 
 
@@ -183,26 +162,6 @@ export default function PrimaryDisplay({
       x: Math.floor(display.x * scaleX),
       y: Math.floor(display.y * scaleY),
     }
-  }
-
-
-  const fetchSpectraAlongLine = async (p0: ImagePoint, p1: ImagePoint, step = 1) => {
-    if (!dataset) return null
-
-    const params = new URLSearchParams({
-      x0: p0.x.toString(),
-      y0: p0.y.toString(),
-      x1: p1.x.toString(),
-      y1: p1.y.toString(),
-      step: step.toString(),
-    })
-
-    const res = await fetch(`/api/datasets/${dataset.id}/spectra-line?${params}`)
-    if (!res.ok) {
-      console.error('Failed to fetch line spectra', await res.text())
-      return null
-    }
-    return (await res.json()) as { spectra: Spectrum[] }
   }
 
   const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number) => {
@@ -264,9 +223,9 @@ export default function PrimaryDisplay({
 
     // store probe annotation (NEW)
     if (selectionMode === 'single') {
-      clearProbePointsForDataset(dataset.id)  // ✅ clear old probes
+      clearProbePointsForDataset(dataset.id)  // clear old probes
     }
-    addProbePoint(imgCoords.x, imgCoords.y)   // ✅ save this probe point
+    addProbePoint(imgCoords.x, imgCoords.y)   // save this probe point
   }
 
   const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
@@ -282,8 +241,7 @@ export default function PrimaryDisplay({
   }
   const hasActiveDraft =
     dragStart !== null ||
-    draftVertices !== null ||
-    lineStart !== null
+    draftVertices !== null
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -295,8 +253,7 @@ export default function PrimaryDisplay({
       setDragCurrent(null)
       setDraftVertices(null)
       setDraftHover(null)
-      setLineStart(null)
-      setLineCurrent(null)
+
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -326,7 +283,7 @@ export default function PrimaryDisplay({
       setDragStart(displayPt)
       setDragCurrent(displayPt)
 
-    } 
+    }
 
     else if (isPolygonLikeMode) {
       if (!draftVertices) {
@@ -364,6 +321,10 @@ export default function PrimaryDisplay({
       setDragCurrent(displayPt)
     }
 
+    // polygon preview: update hover point while drawing
+    if (isPolygonLikeMode && draftVertices) {
+      setDraftHover(displayPt)
+    }
 
   }
 
@@ -468,15 +429,6 @@ export default function PrimaryDisplay({
         if (onRegionSpectra && Array.isArray(data.spectra)) {
           onRegionSpectra(data.spectra)
         }
-
-        // keep region visible
-        setLastRegion({
-          x0: xMinDisp,
-          y0: yMinDisp,
-          x1: xMaxDisp,
-          y1: yMaxDisp,
-          shape: selectionMode === 'ellipse' ? 'ellipse' : 'rect',
-        })
       }
     } catch (err) {
       console.error('Error fetching region spectra', err)
@@ -488,8 +440,6 @@ export default function PrimaryDisplay({
 
   // ---- overlay while dragging OR last region ----
   let selectionOverlay: JSX.Element | null = null
-
-  let lineOverlay: JSX.Element | null = null
 
   let polygonOverlay: JSX.Element | null = null
 
@@ -578,6 +528,27 @@ export default function PrimaryDisplay({
               />
             )
           }
+
+          if (a.type === 'polygon') {
+            const pts = a.geometry.vertices
+              .map(toDisplayCoords)
+              .filter((p): p is DisplayPoint => !!p)
+              .map((p) => `${p.x},${p.y}`)
+              .join(' ')
+
+            if (!pts) return null
+
+            return (
+              <polygon
+                key={a.id}
+                points={pts}
+                fill="rgba(255,0,0,0.12)"
+                stroke="red"
+                strokeWidth={2}
+              />
+            )
+          }
+
           if (a.kind === 'probe' && a.type === 'point') {
             const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
             if (!p) return null
@@ -698,36 +669,6 @@ export default function PrimaryDisplay({
   }
 
 
-
-  if (dragStart && dragCurrent && isBoxMode) {
-    const left = Math.min(dragStart.x, dragCurrent.x)
-    const top = Math.min(dragStart.y, dragCurrent.y)
-    const width = Math.abs(dragCurrent.x - dragStart.x)
-    const height = Math.abs(dragCurrent.y - dragStart.y)
-
-    selectionOverlay = (
-      <div
-        className={`selection-overlay ${selectionMode === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
-          }`}
-        style={{ left, top, width, height, border: '2px solid red' }}
-      />
-    )
-  } else if (lastRegion) {
-    const { x0, y0, x1, y1, shape } = lastRegion
-    const left = Math.min(x0, x1)
-    const top = Math.min(y0, y1)
-    const width = Math.abs(x1 - x0)
-    const height = Math.abs(y1 - y0)
-
-    selectionOverlay = (
-      <div
-        className={`selection-overlay ${shape === 'ellipse' ? 'selection-ellipse' : 'selection-rect'
-          }`}
-        style={{ left, top, width, height, border: '2px solid red' }}
-      />
-    )
-  }
-
   return (
     <section className="primary-display" aria-label="Primary Display">
       {show && rgbImgUrl ? (
@@ -747,7 +688,7 @@ export default function PrimaryDisplay({
           <img
             ref={imgRef}
             src={rgbImgUrl}
-            alt={`Hyperspectral Image${dataset ? `– ${dataset.name}` : ''
+            alt={`Hyperspectral Image${dataset ? ` ${dataset.name}` : ''
               }`}
             style={{
               width: '100%',
@@ -761,7 +702,8 @@ export default function PrimaryDisplay({
           {savedOverlay}
           {selectionOverlay}
           {polygonOverlay}
-          {lineOverlay}
+ 
+
 
 
 
