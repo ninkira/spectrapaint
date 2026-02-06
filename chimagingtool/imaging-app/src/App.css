@@ -9,6 +9,13 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 
 /* App shell */
 .app{display:flex;flex-direction:column;height:100%}
+/* Make sure icons inside toolbar buttons have a visible size */
+.toolbar-btn svg {
+  width: 20px !important;
+  height: 20px !important;
+  flex-shrink: 0;
+}
+
 
 /* Toolbar (top) */
 .toolbar{
@@ -16,10 +23,100 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
   background: var(--panel); border-bottom:1px solid var(--border); padding:0 12px;
 }
 .toolbar .title{font-weight:600}
-.toolbar .tools{margin-left:auto; display:flex; align-items:center; gap:6px}
+.toolbar .tools{ display:flex; align-items:center; gap:6px}
 .toolbar .tools .divider{width:1px; height:22px; background:var(--border); margin:0 4px}
-.toolbar .tools button{width:30px; height:30px; border-radius:8px}
+.toolbar .tools button{border-radius:8px}
 .toolbar .tools button:hover{background:#1b2431}
+
+.toolbar {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+}
+
+.toolbar .title {
+  font-weight: 600;
+}
+
+.toolbar .tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar .tools .divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* 🔹 shared style for all top-row buttons */
+.toolbar-btn {
+
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;   /* ← THIS centers the icon */
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+}
+
+.toolbar .tools button,
+.toolbar-btn {
+  color: #fff !important;
+}
+
+.toolbar-btn:hover {
+  background: #1b2431;
+}
+
+/* shape dropdown */
+.shape-tool {
+  position: relative;    /* keeps menu anchored to this button */
+}
+
+.shape-tool-menu {
+  position: absolute;
+  top: 34px;             /* just below the toolbar */
+  left: 0;
+  min-width: 160px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  padding: 4px 0;
+  z-index: 20;
+}
+
+.shape-tool-item {
+  width: 100%;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.shape-tool-item:hover {
+  background: #1b2431;
+}
+
+.shape-tool-item svg {
+  flex-shrink: 0;
+}
+
 
 /* Main body layout: rail | layer manager | content (primary + work) */
 .body{
@@ -30,34 +127,43 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
   grid-template-rows: 1fr;
   min-height:0;
 }
+
+
+.image-wrapper {
+  position: relative;
+}
+
+.selection-overlay {
+  position: absolute; box-sizing: border-box;
+  border: 1px solid #4f8fff;
+  background: rgba(79, 143, 255, 0.2);
+  pointer-events: none; /* don't block clicks / drags */
+  z-index: 2;           /* ⬅ ensure it is on top of the image */
+}
+
+.selection-ellipse {
+  border-radius: 50%;
+}
+
 .viewer-layout {
 
  display: flex;
   flex-direction: row;
   width: 100%;
     min-width: 100%;
-  height: calc(100vh - 50px);
+  height: 100%;
   gap: 1rem;                      /* optional */
 }
 
 /* Left: image + band picker */
-.primary-display {
-  display: flex;
-  flex-direction: column;
-  flex:2;
-}
+.primary-display{ flex:2 1 0; min-width:0; display:flex; flex-direction:column; }
 
 /* Right: datasets + spectrum */
-.work-area {
-display: flex;
-flex: 2;
-  flex-direction: column;
-  gap: 1rem;
-  padding: 1rem;
-  overflow-y: auto;
-  border-left: 1px solid #333; /* optional */
+.work-area{ flex:1 1 0; min-width:0; overflow-y: scroll;  }
+.work-area,
+.lm-list {
+  scrollbar-gutter: stable;
 }
-
 
 /* Project Navigation (left rail) */
 .project-nav{
@@ -89,7 +195,13 @@ flex: 2;
 .lm-name{font-size:13px}
 
 /* Content: Primary Display | resizer | Work Area */
-.content{display:flex; min-width:100%; overflow:hidden}
+.content{
+  display: flex;
+  min-width: 0;     /* IMPORTANT */
+  overflow: hidden;
+  height: 100%;
+}
+
 
 /* Primary Display */
 .primary-wrap{display:flex; background:#0c111a; border-right:1px solid var(--border)}
@@ -97,6 +209,51 @@ flex: 2;
 .primary-display img{
   display:block; width:100%; height:auto; object-fit:contain; border-radius:6px;
   border:1px solid var(--border); background:#0a0f18;
+}
+
+.primary-display img {
+  -webkit-user-drag: none; /* Chrome / Safari */
+  user-drag: none;
+  user-select: none;
+}
+.image-wrapper{ width:100%; min-width:0; display:block; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+
+
+.buttonRow {
+  display: flex;
+  gap: 0.75rem;
+}
+
+/* Base button */
+.btn {
+  padding: 0.6rem 1.2rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+
+/* Secondary / neutral */
+.btn-secondary {
+  background-color: #d6dadd;
+  color: #4a4a4a;
+}
+
+.btn-secondary:hover {
+  background-color: #c8ccd0;
+}
+
+/* Primary action */
+.btn-primary {
+  background-color: #3b82f6;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #2563eb;
 }
 
 /* Resizer */

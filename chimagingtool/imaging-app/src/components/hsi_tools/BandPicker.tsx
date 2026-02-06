@@ -30,6 +30,7 @@ export default function BandPicker() {
           onChange={(e) => setRgbBands(rgbBands.r, rgbBands.g, +e.target.value)}
         />
       </label>
+      
     </div>
   )
 }
