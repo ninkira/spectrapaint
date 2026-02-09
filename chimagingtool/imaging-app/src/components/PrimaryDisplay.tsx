@@ -33,6 +33,12 @@ export default function PrimaryDisplay({
     selectedRoiId,
     setRoiSpectraForId,
     setSelectedRoiId,
+    selectedProbeGroupId,
+    selectedProbePointId,
+    probeSpectraByGroupId,
+    setProbeSpectraForGroup,
+    setSelectedProbeGroupId,
+    setSelectedProbePointId
   } = useApp()
 
   const show = layers.find((l) => l.id === 'rgb')?.on
@@ -88,8 +94,9 @@ export default function PrimaryDisplay({
   const addProbePoint = (x: number, y: number) => {
     if (!dataset) return
 
+    const id = crypto.randomUUID()
     addAnnotation({
-      id: crypto.randomUUID(),
+      id,
       datasetId: dataset.id,
       kind: 'probe',
       type: 'point',
@@ -98,6 +105,7 @@ export default function PrimaryDisplay({
       label: selectionMode === 'single' ? 'Probe' : 'Probe (multi)',
       ...(probeGroupId ? { groupId: probeGroupId } : {}),
     })
+    setSelectedProbePointId(id)
   }
 
   const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
@@ -243,6 +251,14 @@ export default function PrimaryDisplay({
       clearProbePointsForDataset(dataset.id)  // clear old probes
     }
     addProbePoint(imgCoords.x, imgCoords.y)   // save this probe point
+
+
+    if (selectionMode === 'multiple' && probeGroupId) {
+      const groupSpectra = probeSpectraByGroupId[probeGroupId] ?? []
+      setProbeSpectraForGroup(probeGroupId, [...groupSpectra, spec])
+      setSelectedProbeGroupId(probeGroupId)
+    }
+
   }
 
   const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
@@ -587,9 +603,13 @@ export default function PrimaryDisplay({
                 cy={p.y}
                 r={5}
                 fill="white"
-                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedRoiId ? 3 : 2}
-
+                stroke={a.id === selectedProbePointId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedProbePointId ? 3 : 2}
+                onClick={() => {
+                  setSelectedProbeGroupId(a.groupId ?? null)
+                  setSelectedProbePointId(a.id)
+                }}
+                style={{ cursor: 'pointer' }}
               />
             )
           }

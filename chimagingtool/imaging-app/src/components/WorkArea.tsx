@@ -9,7 +9,14 @@ import DatasetInfo from './Dataset/DatasetInfo'
 import PigmentClassificationModal from './hsi_tools/PigmentClassification'
 
 export default function WorkArea() {
-    const { selectionMode, dataset,  selectedRoiId, roiSpectraById  } = useApp()
+  const {
+    selectionMode,
+    dataset,
+    selectedRoiId,
+    roiSpectraById,
+    selectedProbeGroupId,
+    probeSpectraByGroupId,
+  } = useApp()
 
   const [spectrum, setSpectrum] = useState<Spectrum>(null)
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
@@ -20,7 +27,12 @@ export default function WorkArea() {
   const isMultiPixelMode =
     selectionMode === 'multiple' || selectionMode === 'line'
 
-  const selectedSpectra =  selectedRoiId ? roiSpectraById[selectedRoiId] ?? [] : []
+  const selectedSpectra =
+    selectionMode === 'multiple' && selectedProbeGroupId
+      ? probeSpectraByGroupId[selectedProbeGroupId] ?? []
+      : selectedRoiId
+        ? roiSpectraById[selectedRoiId] ?? []
+        : []
 
 
   let plot: React.ReactNode = null

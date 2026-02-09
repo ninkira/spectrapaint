@@ -44,6 +44,15 @@ type Ctx = {
   roiSpectraById: Record<string, Spectrum[]>
   setRoiSpectraForId: (id: string, spectra: Spectrum[]) => void
 
+
+  selectedProbeGroupId: string | null
+  setSelectedProbeGroupId: (id: string | null) => void
+  probeSpectraByGroupId: Record<string, Spectrum[]>
+  setProbeSpectraForGroup: (id: string, spectra: Spectrum[]) => void
+  selectedProbePointId: string | null
+  setSelectedProbePointId: (id: string | null) => void
+
+
 };
 
 const Ctx = createContext<Ctx>(null as any);
@@ -80,6 +89,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // new for selection one or multiple pixels in the image
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
+
+  const [selectedProbeGroupId, setSelectedProbeGroupId] = useState<string | null>(null)
+  const [probeSpectraByGroupId, setProbeSpectraByGroupId] = useState<Record<string, Spectrum[]>>({})
+  const [selectedProbePointId, setSelectedProbePointId] = useState<string | null>(null)
+
+  const setProbeSpectraForGroup = (id: string, spectra: Spectrum[]) => {
+    setProbeSpectraByGroupId(prev => ({ ...prev, [id]: spectra }))
+  }
+
 
 
 
@@ -153,6 +171,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     roiSpectraById,
     setRoiSpectraForId,
 
+    selectedProbeGroupId,
+    setSelectedProbeGroupId,
+    probeSpectraByGroupId,
+    setProbeSpectraForGroup,
+    selectedProbePointId,
+    setSelectedProbePointId,
+
   }), [
     layers,
     dataset,
@@ -167,6 +192,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     roiSpectraById,
     setSelectedRoiId,
     setRoiSpectraForId,
+    selectedProbeGroupId,
+    probeSpectraByGroupId,
+    setSelectedProbeGroupId,
+    setProbeSpectraForGroup,
+    selectedProbePointId,
+    setSelectedProbePointId,
   ])
 
   return (
