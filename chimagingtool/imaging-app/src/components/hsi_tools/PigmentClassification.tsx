@@ -1,11 +1,15 @@
 // imaging-app/src/components/hsi_tools/PigmentClassification.tsx
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
+import SpectrumPlot, { type Spectrum } from './SpectrumPlot'
+import InfoModal from '../Dataset/DatasetInfoModal'
 
 interface PigmentClassificationModalProps {
   isOpen: boolean
   title: string
   onClose: () => void
-  children: React.ReactNode
+  children?: React.ReactNode
+  selectedRoiId: string | null
+  roiSpectraById: Record<string, Spectrum[]>
 }
 
 const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
@@ -13,106 +17,129 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
   title,
   onClose,
   children,
+  selectedRoiId,
+  roiSpectraById,
 }) => {
-  const [value, setValue] = useState('')
+  const [methods, setMethods] = useState<{ id: string; label: string }[]>([])
+  const [methodId, setMethodId] = useState('')
+  const [isRunning, setIsRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const loadMethods = async () => {
+      try {
+        setError(null)
+        const r = await fetch('/api/classification/methods')
+        if (!r.ok) throw new Error(`Methods failed (${r.status})`)
+        const data = await r.json()
+        const loaded = data.methods ?? []
+        setMethods(loaded)
+        setMethodId(loaded[0]?.id ?? '')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load methods')
+      }
+    }
+
+    loadMethods()
+  }, [isOpen])
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selectedRoiId || !methodId) return
+
+    try {
+      setIsRunning(true)
+      setError(null)
+
+      const res = await fetch('/api/classification/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          methodId,
+          roiId: selectedRoiId,
+          spectra: roiSpectraById[selectedRoiId] ?? [],
+        }),
+      })
+
+      if (!res.ok) throw new Error(`Run failed (${res.status})`)
+      // TODO: handle response payload if needed
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Unknown error')
+    } finally {
+      setIsRunning(false)
+    }
+  }
 
   if (!isOpen) return null
 
-  const handleSubmit = (event: React.FormEvent) => {
-    event.preventDefault()
-    alert('A name was submitted: ' + value)
-  }
-
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.4)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
+    <InfoModal
+      isOpen={isOpen}
+      title={title}
+      onClose={onClose}
+      panelStyle={{
+        width: 'min(1100px, 95vw)',
+        maxWidth: '95vw',
+        maxHeight: '90vh',
+        color: '#111',
       }}
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
     >
       <div
         style={{
-          background: 'white',
-          minWidth: '320px',
-          maxWidth: '900px',
-          width: '90vw',
-          maxHeight: '80vh',
-          borderRadius: '8px',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
-          padding: '1.25rem 1.5rem',
-          overflowY: 'auto',
+          display: 'grid',
+          gridTemplateColumns: 'minmax(360px, 1fr) minmax(280px, 360px)',
+          gap: '1rem',
+          alignItems: 'start',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
-          <h2 style={{ margin: 0, fontSize: '1.1rem', flex: 1 }}>{title}</h2>
-          <button
-            onClick={onClose}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              fontSize: '1.4rem',
-              cursor: 'pointer',
-              lineHeight: 1,
-            }}
-            aria-label="Close"
-          >
-            ×
-          </button>
+        <div>
+          {children}
+          <h3>Result Display</h3>
+          <SpectrumPlot spectra={selectedRoiId ? (roiSpectraById[selectedRoiId] ?? []) : []} />
         </div>
 
-        <div
+        <form
+          onSubmit={handleSubmit}
           style={{
             display: 'flex',
-            gap: '1.25rem',
-            alignItems: 'stretch',
-            flexWrap: 'wrap',
+            flexDirection: 'column',
+            gap: '0.75rem',
           }}
         >
-          <div style={{ flex: '1 1 320px', minWidth: '260px' }}>{children}</div>
-          <form
-            onSubmit={handleSubmit}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem',
-              flex: '1 1 320px',
-              minWidth: '260px',
-            }}
-          >
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              Preprocessing Method
-              <select defaultValue="coconut">
-                <option value="grapefruit">Grapefruit</option>
-                <option value="lime">Lime</option>
-                <option value="coconut">Coconut</option>
-                <option value="mango">Mango</option>
-              </select>
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              Classification Method
-              <select defaultValue="coconut">
-                <option value="grapefruit">Grapefruit</option>
-                <option value="lime">Lime</option>
-                <option value="coconut">Coconut</option>
-                <option value="mango">Mango</option>
-              </select>
-            </label>
-            <input type="submit" value="Submit" />
-          </form>
-        </div>
+          <h2>Pigment Classification Options</h2>
+             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            Preprocessing Method
+            <select value={methodId} onChange={(e) => setMethodId(e.target.value)}>
+              {methods.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </label>
+
+
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            Analysis Method
+            <select value={methodId} onChange={(e) => setMethodId(e.target.value)}>
+              {methods.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <button type="submit" disabled={isRunning || !selectedRoiId || !methodId}>
+            {isRunning ? 'Running...' : 'Run classification'}
+          </button>
+
+          {error && <div style={{ color: 'crimson' }}>{error}</div>}
+        </form>
       </div>
-    </div>
+    </InfoModal>
   )
+
+
 }
 
 export default PigmentClassificationModal

@@ -20,7 +20,7 @@ export default function WorkArea() {
 
   const [spectrum, setSpectrum] = useState<Spectrum>(null)
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
-    const [isOpen, setIsOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(false)
 
   const isRegionMode =
     selectionMode === 'rect' || selectionMode === 'ellipse'
@@ -71,45 +71,35 @@ export default function WorkArea() {
         {plot}
 
 
-        
+
         <div className="buttonRow">
           <button className="btn btn-primary" onClick={() => setIsOpen(true)}>
             Material Classification
           </button>
 
 
-    <button className="btn btn-secondary">
-    Export Region
-  </button>
+          <button className="btn btn-secondary">
+            Export Region
+          </button>
+        </div>
 
-    
+
         <PigmentClassificationModal
           isOpen={isOpen}
-          title={dataset ? `Pigment Classification – ${dataset.name}` : 'Pigment Classification'}
+          title={dataset ? `Pigment Classification - ${dataset.name}` : 'Pigment Classification'}
           onClose={() => setIsOpen(false)}
+          selectedRoiId={selectedRoiId}
+          roiSpectraById={roiSpectraById}
         >
-          {dataset ? (
-            <div style={{ fontSize: '0.9rem' }}>
-              <p><strong>ID:</strong> {dataset.id}</p>
-              <p><strong>Size:</strong> {dataset.width} × {dataset.height} pixels</p>
-              <p><strong>Bands:</strong> {dataset.wavelengths_nm.length}</p>
-
-              {/* Optional: show context */}
-              <p><strong>Selection mode:</strong> {selectionMode}</p>
-            </div>
-          ) : (
-            <p style={{ fontSize: '0.9rem' }}>
-              No dataset loaded. Select a dataset to run pigment classification.
-            </p>
-          )}
+          {/* children */}
         </PigmentClassificationModal>
-    </div>
+
 
 
 
       </section>
 
-               
+
     </div>
   )
 }

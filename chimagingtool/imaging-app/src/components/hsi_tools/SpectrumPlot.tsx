@@ -44,7 +44,6 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({ spectra }) => {
 
   return (
     <div>
-      <h3>Spectrum</h3>
 
       <Plot
         data={data}
