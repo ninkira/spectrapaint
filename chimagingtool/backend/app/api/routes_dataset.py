@@ -8,6 +8,8 @@ import json
 from typing import List, Literal, Optional
 from pydantic import BaseModel
 
+from ..analysis.classification.distance_registry import METHODS
+
 from typing import Literal
 
 router = APIRouter()
@@ -16,10 +18,10 @@ router = APIRouter()
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 REGISTRY_FILE = DATA_DIR / "registry.json"
 
+# dataset API calls
 def registry():
     with open(REGISTRY_FILE, "r") as f:
         return json.load(f)
-
 
 @router.get("/datasets", response_model=list[DatasetMeta])
 def list_datasets():
@@ -309,3 +311,12 @@ def spectra_polygon(id: str, req: PolygonRequest):
                 return {"spectra": spectra_out, "truncated": True, "count": count}
 
     return {"spectra": spectra_out, "truncated": False, "count": count}
+
+# Analysis Methods
+
+
+@router.get("/classification/methods")
+def list_methods():
+    return {"methods": METHODS}
+
+
