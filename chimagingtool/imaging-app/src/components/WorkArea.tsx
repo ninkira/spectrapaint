@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useApp } from '../state/AppContext'
 import PrimaryDisplay from './PrimaryDisplay'
 import SpectrumPlot, { type Spectrum } from './hsi_tools/SpectrumPlot'
-import MultiSpectrumPlot from './hsi_tools/MultiSpectrumPlot'
 import DatasetInfo from './Dataset/DatasetInfo'
 import PigmentClassificationModal from './hsi_tools/PigmentClassification'
 
@@ -41,18 +40,18 @@ export default function WorkArea() {
     plot = <SpectrumPlot spectra={selectedSpectra} />
   } else if (isMultiPixelMode) {
     plot = (
-      <MultiSpectrumPlot
+      <SpectrumPlot
         spectra={selectedSpectra}
         title="Multiple spectra (clicked pixels)"
-        emptyMessage="Click on the image to add spectra in multi-selection mode."
+      
       />
     )
   } else if (isRegionMode) {
     plot = (
-      <MultiSpectrumPlot
+      <SpectrumPlot
         spectra={selectedSpectra}
         title="Region spectra (rectangle / ellipse)"
-        emptyMessage="Drag a rectangle or ellipse on the image to select a region."
+       
       />
     )
   }

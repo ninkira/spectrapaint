@@ -456,16 +456,27 @@ export default function PrimaryDisplay({
       if (!res.ok) {
         console.error('Failed to fetch region spectra', await res.text())
       } else {
-        const data = (await res.json()) as { spectra: Spectrum[] }
-
-        if (onRegionSpectra && Array.isArray(data.spectra)) {
-          onRegionSpectra(data.spectra)
+        const data = (await res.json()) as {
+          wavelengths_nm: number[]
+          region_spectra: Array<{ x: number; y: number; values: number[] }>
+          region_stats?: { n_pixels: number; mean: number[]; std: number[] }
         }
-        if (ann && Array.isArray(data.spectra)) {
-          setRoiSpectraForId(ann.id, data.spectra)
+
+        const spectra: Spectrum[] = Array.isArray(data.region_spectra)
+          ? data.region_spectra.map((s) => ({
+            x: s.x,
+            y: s.y,
+            values: s.values,
+            wavelengths_nm: data.wavelengths_nm,
+          }))
+          : []
+
+        if (onRegionSpectra && spectra.length > 0) {
+          onRegionSpectra(spectra)
+        }
+        if (ann && spectra.length > 0) {
+          setRoiSpectraForId(ann.id, spectra)
           setSelectedRoiId(ann.id)
-
-
         }
       }
     } catch (err) {
