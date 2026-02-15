@@ -37,6 +37,7 @@ type Ctx = {
   // Annotations 
   annotations: Annotation[]
   addAnnotation: (a: Annotation) => void
+  updateAnnotation: (id: string, patch: Partial<Annotation>) => void
   removeAnnotation: (id: string) => void
   clearProbePointsForDataset: (datasetId: string) => void
 
@@ -77,6 +78,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const removeAnnotation = useCallback((id: string) => {
     setAnnotations(prev => prev.filter(a => a.id !== id))
+  }, [])
+
+  const updateAnnotation = useCallback((id: string, patch: Partial<Annotation>) => {
+    setAnnotations(prev => prev.map(a => (a.id === id ? { ...a, ...patch, updatedAt: new Date().toISOString() } : a)))
   }, [])
 
   const clearProbePointsForDataset = useCallback((datasetId: string) => {
@@ -167,6 +172,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Annotations
     annotations,
     addAnnotation,
+    updateAnnotation,
     removeAnnotation,
     clearProbePointsForDataset,
 
@@ -193,6 +199,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     showSignalProcessing,
     selectedSpectra,
     annotations,
+    updateAnnotation,
     clearProbePointsForDataset,
     selectedRoiId,
     roiSpectraById,

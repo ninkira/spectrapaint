@@ -7,6 +7,8 @@ export type AnnotationBase = {
   createdAt: string
   updatedAt?: string
   label?: string
+  title?: string
+  description?: string
   color?: string
   kind: 'probe' | 'roi'
   groupId?: string

@@ -95,6 +95,7 @@ export default function PrimaryDisplay({
     if (!dataset) return
 
     const id = crypto.randomUUID()
+    const defaultTitle = selectionMode === 'single' ? 'Probe' : 'Probe (multi)'
     addAnnotation({
       id,
       datasetId: dataset.id,
@@ -102,7 +103,9 @@ export default function PrimaryDisplay({
       type: 'point',
       createdAt: new Date().toISOString(),
       geometry: { x, y },
-      label: selectionMode === 'single' ? 'Probe' : 'Probe (multi)',
+      label: defaultTitle,
+      title: defaultTitle,
+      description: '',
       ...(probeGroupId ? { groupId: probeGroupId } : {}),
     })
     setSelectedProbePointId(id)
@@ -129,6 +132,8 @@ export default function PrimaryDisplay({
       createdAt: new Date().toISOString(),
       geometry: { vertices: imgVerts },
       label: 'ROI',
+      title: 'ROI',
+      description: '',
     }
 
     addAnnotation(ann)
@@ -412,6 +417,8 @@ export default function PrimaryDisplay({
           createdAt: new Date().toISOString(),
           geometry: { x, y, w, h },
           label: 'ROI',
+          title: 'ROI',
+          description: '',
         }
       }
 
@@ -429,6 +436,8 @@ export default function PrimaryDisplay({
             ry: h / 2,
           },
           label: 'ROI',
+          title: 'ROI',
+          description: '',
         }
 
       }
