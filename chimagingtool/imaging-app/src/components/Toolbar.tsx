@@ -28,7 +28,7 @@ export default function Toolbar() {
     setShowSignalProcessing,
   } = useApp();
 
-  const openSignalProcessing = () => {
+  const toggleSignalProcessing = () => {
     setShowSignalProcessing(!showSignalProcessing)
   }
 
@@ -53,8 +53,7 @@ export default function Toolbar() {
         {/* ------------------------------- */}
         {/* SINGLE ↔ MULTI pixel selection */}
         {/* ------------------------------- */}
-
-      
+  
         <button
           aria-label="SelectMultiplePoints"
           className={selectionMode === "multiple" ? "active" : ""}
@@ -73,7 +72,7 @@ export default function Toolbar() {
         <button
           aria-label="SignalProcessing"
           className={showSignalProcessing ? "active" : ""}
-          onClick={openSignalProcessing}
+          onClick={toggleSignalProcessing}
         >
           <ChartLine size={20} />
         </button>

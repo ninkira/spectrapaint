@@ -99,16 +99,17 @@ export default function WorkArea() {
 
 
 
-        <div className="buttonRow">
-          <button className="btn btn-primary" onClick={() => setIsOpen(true)}>
-            Material Classification
-          </button>
+        {showSignalProcessing && (
+          <div className="buttonRow">
+            <button className="btn btn-primary" onClick={() => setIsOpen(true)}>
+              Material Classification
+            </button>
 
-
-          <button className="btn btn-secondary">
-            Export Region
-          </button>
-        </div>
+            <button className="btn btn-secondary">
+              Export Region
+            </button>
+          </div>
+        )}
 
         {activeAnnotation && (
           <section
