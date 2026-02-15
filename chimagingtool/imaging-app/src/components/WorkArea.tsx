@@ -65,23 +65,14 @@ export default function WorkArea() {
   let plot: React.ReactNode = null
 
   if (showSignalProcessing) {
-    if (selectionMode === 'single') {
-      plot = <SpectrumPlot spectra={selectedSpectra} />
-    } else if (isMultiPixelMode) {
-      plot = (
-        <SpectrumPlot
-          spectra={selectedSpectra}
-          title="Multiple spectra (clicked pixels)"
-        />
-      )
-    } else if (isRegionMode) {
-      plot = (
-        <SpectrumPlot
-          spectra={selectedSpectra}
-          title="Region spectra (rectangle / ellipse)"
-        />
-      )
-    }
+    const title =
+      isMultiPixelMode
+        ? 'Multiple spectra (clicked pixels)'
+        : isRegionMode
+          ? 'Region spectra (rectangle / ellipse)'
+          : 'Selected spectra'
+
+    plot = <SpectrumPlot spectra={selectedSpectra} title={title} />
   }
 
   return (
