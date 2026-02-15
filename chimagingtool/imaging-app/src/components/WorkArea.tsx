@@ -10,6 +10,7 @@ import PigmentClassificationModal from './hsi_tools/PigmentClassification'
 export default function WorkArea() {
   const {
     selectionMode,
+    showSignalProcessing,
     dataset,
     selectedRoiId,
     roiSpectraById,
@@ -36,24 +37,24 @@ export default function WorkArea() {
 
   let plot: React.ReactNode = null
 
-  if (selectionMode === 'single') {
-    plot = <SpectrumPlot spectra={selectedSpectra} />
-  } else if (isMultiPixelMode) {
-    plot = (
-      <SpectrumPlot
-        spectra={selectedSpectra}
-        title="Multiple spectra (clicked pixels)"
-      
-      />
-    )
-  } else if (isRegionMode) {
-    plot = (
-      <SpectrumPlot
-        spectra={selectedSpectra}
-        title="Region spectra (rectangle / ellipse)"
-       
-      />
-    )
+  if (showSignalProcessing) {
+    if (selectionMode === 'single') {
+      plot = <SpectrumPlot spectra={selectedSpectra} />
+    } else if (isMultiPixelMode) {
+      plot = (
+        <SpectrumPlot
+          spectra={selectedSpectra}
+          title="Multiple spectra (clicked pixels)"
+        />
+      )
+    } else if (isRegionMode) {
+      plot = (
+        <SpectrumPlot
+          spectra={selectedSpectra}
+          title="Region spectra (rectangle / ellipse)"
+        />
+      )
+    }
   }
 
   return (

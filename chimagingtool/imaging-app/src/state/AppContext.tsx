@@ -26,6 +26,8 @@ type Ctx = {
   // Selection
   selectionMode: SelectionMode;
   setSelectionMode: (m: SelectionMode) => void;
+  showSignalProcessing: boolean
+  setShowSignalProcessing: (v: boolean) => void
 
   // spetra
   selectedSpectra: Spectrum[];
@@ -89,6 +91,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // new for selection one or multiple pixels in the image
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
+  const [showSignalProcessing, setShowSignalProcessing] = useState(false)
 
   const [selectedProbeGroupId, setSelectedProbeGroupId] = useState<string | null>(null)
   const [probeSpectraByGroupId, setProbeSpectraByGroupId] = useState<Record<string, Spectrum[]>>({})
@@ -153,6 +156,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Selection
     selectionMode,
     setSelectionMode,
+    showSignalProcessing,
+    setShowSignalProcessing,
 
     // Spectra
     selectedSpectra,
@@ -185,6 +190,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     rgbBands,
     rgbImgUrl,
     selectionMode,
+    showSignalProcessing,
     selectedSpectra,
     annotations,
     clearProbePointsForDataset,
