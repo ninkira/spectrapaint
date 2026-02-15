@@ -8,6 +8,8 @@ import json
 from typing import List, Literal, Optional
 from pydantic import BaseModel
 
+from ..analysis.classification.distance_registry import METHODS
+
 from typing import Literal
 
 router = APIRouter()
@@ -16,10 +18,10 @@ router = APIRouter()
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 REGISTRY_FILE = DATA_DIR / "registry.json"
 
+# dataset API calls
 def registry():
     with open(REGISTRY_FILE, "r") as f:
         return json.load(f)
-
 
 @router.get("/datasets", response_model=list[DatasetMeta])
 def list_datasets():
@@ -83,19 +85,23 @@ def spectra_at_pixel(id: str, x: int, y: int):
 
 @router.get("/datasets/{id}/spectra-region")
 def spectra_region(
-        id: str,
-        shape: Literal["rect", "ellipse"],
-        x0: int,
-        y0: int,
-        x1: int,
-        y1: int,
+
+    id: str,
+    shape: Literal["rect", "ellipse"],
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
 ):
     """
-    Return spectra for a region in dataset `id`.
-
-    Query params:
-      - shape = 'rect' or 'ellipse'
-      - (x0, y0), (x1, y1) define the bounding box in *image coordinates*
+    Extracts the signals of annotated region and returns this + region identifier and region stastistics.
+    @param id: region id
+    @param shape: region shape
+    @param x0: start coor
+    @param y0: start coor
+    @param x1: end coor
+    @param y1: end coor
+    @return: out: JSON structure with signal, region identifier and region stats (based on signals)
     """
     rec = registry().get(id)
     if not rec:
@@ -106,7 +112,6 @@ def spectra_region(
     cube = load_cube(img)  # (H, W, B)
     H, W, _ = cube.shape
 
-    # normalize coords
     x_min = max(0, min(x0, x1))
     x_max = min(W - 1, max(x0, x1))
     y_min = max(0, min(y0, y1))
@@ -133,17 +138,36 @@ def spectra_region(
                     continue
 
             spec = cube[y, x, :].astype(float)
+            spectra_out.append({
+                "x": x,
+                "y": y,
+                "values": spec.tolist(),
+            })
 
-            spectra_out.append(
-                {
-                    "x": x,
-                    "y": y,
-                    "wavelengths_nm": wl,
-                    "values": spec.tolist(),
-                }
-            )
+    if not spectra_out:
+        raise HTTPException(400, "Empty region after shape mask")
 
-    return {"spectra": spectra_out}
+    values_matrix = np.asarray([s["values"] for s in spectra_out], dtype=np.float64)
+    n = values_matrix.shape[0]
+
+    out = {
+        "region_id": {
+            "dataset_id": id,
+            "shape": shape,
+            "x0": x0,
+            "y0": y0,
+            "x1": x1,
+            "y1": y1,
+        },
+        "wavelengths_nm": wl,
+        "region_stats": {
+            "n_pixels": n,
+            "mean": values_matrix.mean(axis=0).tolist(),
+            "std": values_matrix.std(axis=0, ddof=1 if n > 1 else 0).tolist(),
+        },
+        "region_spectra": spectra_out,
+    }
+    return out
 
 
 def bresenham(x0: int, y0: int, x1: int, y1: int):
@@ -309,3 +333,32 @@ def spectra_polygon(id: str, req: PolygonRequest):
                 return {"spectra": spectra_out, "truncated": True, "count": count}
 
     return {"spectra": spectra_out, "truncated": False, "count": count}
+
+# Analysis Methods
+
+
+@router.get("/classification/methods")
+def list_methods():
+    return {"methods": METHODS}
+
+
+@router.post("/classification/{signal}/run")
+def run_pipeline(signal, preprocssing_method, classifcation_method):
+
+    results = {
+        "preprocessing_method": preprocssing_method,
+        "classification_method": classifcation_method,
+
+    }
+    return results
+
+def return_scheme(results, dataset_id, region_id):
+    results =  run_pipeline()
+    return_scheme = {
+        "datasetId": "ds_001",
+        "roiId": "roi_123",
+        "results": results
+    }
+
+    return return_scheme
+

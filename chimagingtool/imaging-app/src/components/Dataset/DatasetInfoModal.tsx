@@ -6,6 +6,7 @@ interface InfoModalProps {
   title: string
   onClose: () => void
   children: React.ReactNode
+  panelStyle?: React.CSSProperties
 }
 
 const InfoModal: React.FC<InfoModalProps> = ({
@@ -13,6 +14,7 @@ const InfoModal: React.FC<InfoModalProps> = ({
   title,
   onClose,
   children,
+  panelStyle,
 }) => {
   if (!isOpen) return null
 
@@ -39,6 +41,7 @@ const InfoModal: React.FC<InfoModalProps> = ({
           boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
           padding: '1.25rem 1.5rem',
           overflowY: 'auto',
+          ...panelStyle,
         }}
         onClick={(e) => e.stopPropagation()} // don’t close when clicking content
       >

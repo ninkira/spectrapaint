@@ -30,6 +30,15 @@ export default function PrimaryDisplay({
     annotations,
     addAnnotation,
     clearProbePointsForDataset,
+    selectedRoiId,
+    setRoiSpectraForId,
+    setSelectedRoiId,
+    selectedProbeGroupId,
+    selectedProbePointId,
+    probeSpectraByGroupId,
+    setProbeSpectraForGroup,
+    setSelectedProbeGroupId,
+    setSelectedProbePointId
   } = useApp()
 
   const show = layers.find((l) => l.id === 'rgb')?.on
@@ -85,8 +94,9 @@ export default function PrimaryDisplay({
   const addProbePoint = (x: number, y: number) => {
     if (!dataset) return
 
+    const id = crypto.randomUUID()
     addAnnotation({
-      id: crypto.randomUUID(),
+      id,
       datasetId: dataset.id,
       kind: 'probe',
       type: 'point',
@@ -95,9 +105,11 @@ export default function PrimaryDisplay({
       label: selectionMode === 'single' ? 'Probe' : 'Probe (multi)',
       ...(probeGroupId ? { groupId: probeGroupId } : {}),
     })
+    setSelectedProbePointId(id)
   }
 
   const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
+    if (!dataset) return
     if (verts.length < 3) return
 
     const imgVerts: ImagePoint[] = []
@@ -108,18 +120,6 @@ export default function PrimaryDisplay({
     }
 
     setPolygons((prev) => [...prev, { vertices: imgVerts }])
-    void (async () => {
-      const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
-      if (!data?.spectra) return
-
-      // keep callback (optional)
-      onRegionSpectra?.(data.spectra)
-
-      // IMPORTANT: add to global selection so Plotly updates (same as other modes)
-      for (const s of data.spectra) {
-        if (s) addSpectrum(s)
-      }
-    })()
 
     const ann: PolygonAnn = {
       id: crypto.randomUUID(),
@@ -133,8 +133,33 @@ export default function PrimaryDisplay({
 
     addAnnotation(ann)
 
+    void (async () => {
+      const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
+
+      if (!data?.spectra) return
+
+
+
+      // keep callback (optional)
+      onRegionSpectra?.(data.spectra)
+
+      // IMPORTANT: add to global selection so Plotly updates (same as other modes)
+      for (const s of data.spectra) {
+        if (s) addSpectrum(s)
+
+      }
+
+
+
+
+      setRoiSpectraForId(ann.id, data.spectra)
+      setSelectedRoiId(ann.id)
+
+    })()
+
     setDraftVertices(null)
     setDraftHover(null)
+
   }
 
 
@@ -226,6 +251,14 @@ export default function PrimaryDisplay({
       clearProbePointsForDataset(dataset.id)  // clear old probes
     }
     addProbePoint(imgCoords.x, imgCoords.y)   // save this probe point
+
+
+    if (selectionMode === 'multiple' && probeGroupId) {
+      const groupSpectra = probeSpectraByGroupId[probeGroupId] ?? []
+      setProbeSpectraForGroup(probeGroupId, [...groupSpectra, spec])
+      setSelectedProbeGroupId(probeGroupId)
+    }
+
   }
 
   const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
@@ -368,9 +401,10 @@ export default function PrimaryDisplay({
 
 
     const MIN_SIZE = 3
+    let ann: RectAnn | EllipseAnn | null = null
     if (w >= MIN_SIZE && h >= MIN_SIZE) {
       if (selectionMode === 'rect') {
-        const ann: RectAnn = {
+        ann = {
           id: crypto.randomUUID(),
           datasetId: dataset.id,
           kind: 'roi',
@@ -379,12 +413,10 @@ export default function PrimaryDisplay({
           geometry: { x, y, w, h },
           label: 'ROI',
         }
-
-        addAnnotation(ann)
       }
 
       if (selectionMode === 'ellipse') {
-        const ann: EllipseAnn = {
+        ann = {
           id: crypto.randomUUID(),
           datasetId: dataset.id,
           kind: 'roi',
@@ -398,9 +430,9 @@ export default function PrimaryDisplay({
           },
           label: 'ROI',
         }
-        addAnnotation(ann)
-      }
 
+      }
+      if (ann) addAnnotation(ann)
     }
 
 
@@ -424,10 +456,27 @@ export default function PrimaryDisplay({
       if (!res.ok) {
         console.error('Failed to fetch region spectra', await res.text())
       } else {
-        const data = (await res.json()) as { spectra: Spectrum[] }
+        const data = (await res.json()) as {
+          wavelengths_nm: number[]
+          region_spectra: Array<{ x: number; y: number; values: number[] }>
+          region_stats?: { n_pixels: number; mean: number[]; std: number[] }
+        }
 
-        if (onRegionSpectra && Array.isArray(data.spectra)) {
-          onRegionSpectra(data.spectra)
+        const spectra: Spectrum[] = Array.isArray(data.region_spectra)
+          ? data.region_spectra.map((s) => ({
+            x: s.x,
+            y: s.y,
+            values: s.values,
+            wavelengths_nm: data.wavelengths_nm,
+          }))
+          : []
+
+        if (onRegionSpectra && spectra.length > 0) {
+          onRegionSpectra(spectra)
+        }
+        if (ann && spectra.length > 0) {
+          setRoiSpectraForId(ann.id, spectra)
+          setSelectedRoiId(ann.id)
         }
       }
     } catch (err) {
@@ -499,7 +548,7 @@ export default function PrimaryDisplay({
         top: 0,
         width: '100%',
         height: '100%',
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
       }}
     >
       {annotations
@@ -523,8 +572,10 @@ export default function PrimaryDisplay({
                 width={width}
                 height={height}
                 fill="rgba(255,0,0,0.12)"
-                stroke="red"
-                strokeWidth={2}
+                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedRoiId ? 3 : 2}
+                onClick={() => setSelectedRoiId(a.id)}
+                style={{ cursor: 'pointer' }}
               />
             )
           }
@@ -543,8 +594,11 @@ export default function PrimaryDisplay({
                 key={a.id}
                 points={pts}
                 fill="rgba(255,0,0,0.12)"
-                stroke="red"
-                strokeWidth={2}
+                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedRoiId ? 3 : 2}
+                onClick={() => setSelectedRoiId(a.id)}
+                style={{ cursor: 'pointer' }}
+
               />
             )
           }
@@ -560,8 +614,13 @@ export default function PrimaryDisplay({
                 cy={p.y}
                 r={5}
                 fill="white"
-                stroke="lime"
-                strokeWidth={2}
+                stroke={a.id === selectedProbePointId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedProbePointId ? 3 : 2}
+                onClick={() => {
+                  setSelectedProbeGroupId(a.groupId ?? null)
+                  setSelectedProbePointId(a.id)
+                }}
+                style={{ cursor: 'pointer' }}
               />
             )
           }
@@ -584,8 +643,10 @@ export default function PrimaryDisplay({
                 rx={rx}
                 ry={ry}
                 fill="rgba(255,0,0,0.10)"
-                stroke="red"
-                strokeWidth={2}
+                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
+                strokeWidth={a.id === selectedRoiId ? 3 : 2}
+                onClick={() => setSelectedRoiId(a.id)}
+                style={{ cursor: 'pointer' }}
               />
             )
           }
@@ -702,7 +763,7 @@ export default function PrimaryDisplay({
           {savedOverlay}
           {selectionOverlay}
           {polygonOverlay}
- 
+
 
 
 

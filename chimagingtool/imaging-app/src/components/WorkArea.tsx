@@ -4,40 +4,54 @@ import { useState } from 'react'
 import { useApp } from '../state/AppContext'
 import PrimaryDisplay from './PrimaryDisplay'
 import SpectrumPlot, { type Spectrum } from './hsi_tools/SpectrumPlot'
-import MultiSpectrumPlot from './hsi_tools/MultiSpectrumPlot'
 import DatasetInfo from './Dataset/DatasetInfo'
 import PigmentClassificationModal from './hsi_tools/PigmentClassification'
 
 export default function WorkArea() {
-    const { selectionMode, selectedSpectra, dataset } = useApp()
+  const {
+    selectionMode,
+    dataset,
+    selectedRoiId,
+    roiSpectraById,
+    selectedProbeGroupId,
+    probeSpectraByGroupId,
+  } = useApp()
 
   const [spectrum, setSpectrum] = useState<Spectrum>(null)
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
-    const [isOpen, setIsOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(false)
 
   const isRegionMode =
     selectionMode === 'rect' || selectionMode === 'ellipse'
   const isMultiPixelMode =
     selectionMode === 'multiple' || selectionMode === 'line'
 
+  const selectedSpectra =
+    selectionMode === 'multiple' && selectedProbeGroupId
+      ? probeSpectraByGroupId[selectedProbeGroupId] ?? []
+      : selectedRoiId
+        ? roiSpectraById[selectedRoiId] ?? []
+        : []
+
+
   let plot: React.ReactNode = null
 
   if (selectionMode === 'single') {
-    plot = <SpectrumPlot spectrum={spectrum} />
+    plot = <SpectrumPlot spectra={selectedSpectra} />
   } else if (isMultiPixelMode) {
     plot = (
-      <MultiSpectrumPlot
+      <SpectrumPlot
         spectra={selectedSpectra}
         title="Multiple spectra (clicked pixels)"
-        emptyMessage="Click on the image to add spectra in multi-selection mode."
+      
       />
     )
   } else if (isRegionMode) {
     plot = (
-      <MultiSpectrumPlot
-        spectra={regionSpectra}
+      <SpectrumPlot
+        spectra={selectedSpectra}
         title="Region spectra (rectangle / ellipse)"
-        emptyMessage="Drag a rectangle or ellipse on the image to select a region."
+       
       />
     )
   }
@@ -56,45 +70,36 @@ export default function WorkArea() {
         {plot}
 
 
-        
+
         <div className="buttonRow">
           <button className="btn btn-primary" onClick={() => setIsOpen(true)}>
             Material Classification
           </button>
 
 
-    <button className="btn btn-secondary">
-    Export Region
-  </button>
+          <button className="btn btn-secondary">
+            Export Region
+          </button>
+        </div>
 
-    
+
         <PigmentClassificationModal
           isOpen={isOpen}
-          title={dataset ? `Pigment Classification – ${dataset.name}` : 'Pigment Classification'}
+          title={dataset ? `Pigment Classification - ${dataset.name}` : 'Pigment Classification'}
           onClose={() => setIsOpen(false)}
+          datasetId={dataset?.id ?? null}
+          selectedRoiId={selectedRoiId}
+          roiSpectraById={roiSpectraById}
         >
-          {dataset ? (
-            <div style={{ fontSize: '0.9rem' }}>
-              <p><strong>ID:</strong> {dataset.id}</p>
-              <p><strong>Size:</strong> {dataset.width} × {dataset.height} pixels</p>
-              <p><strong>Bands:</strong> {dataset.wavelengths_nm.length}</p>
-
-              {/* Optional: show context */}
-              <p><strong>Selection mode:</strong> {selectionMode}</p>
-            </div>
-          ) : (
-            <p style={{ fontSize: '0.9rem' }}>
-              No dataset loaded. Select a dataset to run pigment classification.
-            </p>
-          )}
+          {/* children */}
         </PigmentClassificationModal>
-    </div>
+
 
 
 
       </section>
 
-               
+
     </div>
   )
 }

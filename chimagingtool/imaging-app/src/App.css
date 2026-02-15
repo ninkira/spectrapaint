@@ -129,10 +129,6 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 }
 
 
-.image-wrapper {
-  position: relative;
-}
-
 .selection-overlay {
   position: absolute; box-sizing: border-box;
   border: 1px solid #4f8fff;
@@ -156,7 +152,27 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 }
 
 /* Left: image + band picker */
-.primary-display{ flex:2 1 0; min-width:0; display:flex; flex-direction:column; }
+.primary-display{
+  flex:2 1 0;
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  min-height: 0;
+}
+
+.image-wrapper{
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;          /* important */
+}
+
+.image-wrapper img{
+  width: 100%;
+  height: 100%;           /* instead of auto */
+  object-fit: contain;
+  display:block;
+}
+
 
 /* Right: datasets + spectrum */
 .work-area{ flex:1 1 0; min-width:0; overflow-y: scroll;  }
@@ -216,8 +232,6 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
   user-drag: none;
   user-select: none;
 }
-.image-wrapper{ width:100%; min-width:0; display:block; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
-
 
 .buttonRow {
   display: flex;
