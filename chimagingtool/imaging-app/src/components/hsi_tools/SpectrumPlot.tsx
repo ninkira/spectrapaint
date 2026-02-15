@@ -15,10 +15,17 @@ type RegionStats = {
   std: number[]
 }
 
+type ComparisonSpectrum = {
+  name: string
+  values: number[]
+  wavelengths_nm?: number[]
+}
+
 interface SpectrumPlotProps {
   spectra?: Spectrum[]
-  wavelengthsNm?: number[]      // from API top-level
-  stats?: RegionStats | null    // from API region_stats
+  wavelengthsNm?: number[] // from API top-level
+  stats?: RegionStats | null // from API region_stats
+  comparisonSpectra?: ComparisonSpectrum[]
   title?: string
 }
 
@@ -26,10 +33,12 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
   spectra = [],
   wavelengthsNm,
   stats,
+  comparisonSpectra = [],
   title = 'Selected region spectra',
 }) => {
   const [showSignals, setShowSignals] = useState(false)
   const [showStdBand, setShowStdBand] = useState(true)
+  const [showMatches, setShowMatches] = useState(true)
 
   const nonNull = useMemo(
     () => spectra.filter((s): s is Exclude<Spectrum, null> => !!s),
@@ -38,7 +47,7 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
 
   const wl = wavelengthsNm ?? nonNull[0]?.wavelengths_nm ?? []
 
-  // fallback: compute mean/std client-side only if backend stats not provided
+  // Fallback compute on client if backend stats are not provided.
   const fallbackStats = useMemo(() => {
     if (!nonNull.length || !wl.length) return null
     const n = nonNull.length
@@ -46,10 +55,10 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
     const mean = new Array(nBands).fill(0)
     const std = new Array(nBands).fill(0)
 
-    for (const s of nonNull) for (let i = 0; i < nBands; i++) mean[i] += s.values[i]
-    for (let i = 0; i < nBands; i++) mean[i] /= n
-    for (const s of nonNull) for (let i = 0; i < nBands; i++) std[i] += (s.values[i] - mean[i]) ** 2
-    for (let i = 0; i < nBands; i++) std[i] = Math.sqrt(std[i] / (n > 1 ? n - 1 : 1))
+    for (const s of nonNull) for (let i = 0; i < nBands; i += 1) mean[i] += s.values[i]
+    for (let i = 0; i < nBands; i += 1) mean[i] /= n
+    for (const s of nonNull) for (let i = 0; i < nBands; i += 1) std[i] += (s.values[i] - mean[i]) ** 2
+    for (let i = 0; i < nBands; i += 1) std[i] = Math.sqrt(std[i] / (n > 1 ? n - 1 : 1))
 
     return { n_pixels: n, mean, std }
   }, [nonNull, wl])
@@ -79,13 +88,13 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
     const upper = usedStats.mean.map((m, i) => m + usedStats.std[i])
 
     data.push(
-      { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1σ', line: { width: 0 } },
+      { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1sigma', line: { width: 0 } },
       {
         x: wl,
         y: upper,
         type: 'scatter',
         mode: 'lines',
-        name: '±1σ band',
+        name: '+/-1sigma band',
         line: { width: 0 },
         fill: 'tonexty',
         fillcolor: 'rgba(59,130,246,0.2)',
@@ -102,6 +111,21 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
     line: { color: '#111', width: 2 },
   })
 
+  if (showMatches) {
+    for (const match of comparisonSpectra) {
+      const xAxis = match.wavelengths_nm && match.wavelengths_nm.length ? match.wavelengths_nm : wl
+      if (xAxis.length !== match.values.length) continue
+      data.push({
+        x: xAxis,
+        y: match.values,
+        type: 'scatter',
+        mode: 'lines',
+        name: match.name,
+        line: { width: 2 },
+      })
+    }
+  }
+
   const layout: Partial<Layout> = {
     autosize: true,
     title: { text: title },
@@ -117,7 +141,10 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
           {showSignals ? 'Hide signals' : 'Show signals'}
         </button>
         <button onClick={() => setShowStdBand((v) => !v)}>
-          {showStdBand ? 'Hide ±1σ' : 'Show ±1σ'}
+          {showStdBand ? 'Hide +/-1sigma' : 'Show +/-1sigma'}
+        </button>
+        <button onClick={() => setShowMatches((v) => !v)}>
+          {showMatches ? 'Hide matches' : 'Show matches'}
         </button>
       </div>
 

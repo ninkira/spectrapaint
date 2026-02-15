@@ -87,6 +87,7 @@ export default function WorkArea() {
           isOpen={isOpen}
           title={dataset ? `Pigment Classification - ${dataset.name}` : 'Pigment Classification'}
           onClose={() => setIsOpen(false)}
+          datasetId={dataset?.id ?? null}
           selectedRoiId={selectedRoiId}
           roiSpectraById={roiSpectraById}
         >
