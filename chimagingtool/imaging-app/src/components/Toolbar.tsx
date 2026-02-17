@@ -24,8 +24,13 @@ export default function Toolbar() {
   const {
     selectionMode,
     setSelectionMode,
-    clearSpectra,  // Optional, if you added this in context
+    showSignalProcessing,
+    setShowSignalProcessing,
   } = useApp();
+
+  const toggleSignalProcessing = () => {
+    setShowSignalProcessing(!showSignalProcessing)
+  }
 
   return (
     <header className="toolbar">
@@ -48,18 +53,7 @@ export default function Toolbar() {
         {/* ------------------------------- */}
         {/* SINGLE ↔ MULTI pixel selection */}
         {/* ------------------------------- */}
-
-        <button
-          aria-label="SelectSinglePoint"
-          className={selectionMode === "single" ? "active" : ""}
-          onClick={() => {
-            clearSpectra?.();       // optional: clear multi-mode data
-            setSelectionMode("single");
-          }}
-        >
-          <MapPin size={18} />
-        </button>
-
+  
         <button
           aria-label="SelectMultiplePoints"
           className={selectionMode === "multiple" ? "active" : ""}
@@ -75,7 +69,11 @@ export default function Toolbar() {
 
         <button aria-label="MagicWand"><WandSparkles size={20} /></button>
 
-        <button aria-label="SignalProcessing">
+        <button
+          aria-label="SignalProcessing"
+          className={showSignalProcessing ? "active" : ""}
+          onClick={toggleSignalProcessing}
+        >
           <ChartLine size={20} />
         </button>
 

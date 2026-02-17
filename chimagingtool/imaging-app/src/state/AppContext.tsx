@@ -26,6 +26,8 @@ type Ctx = {
   // Selection
   selectionMode: SelectionMode;
   setSelectionMode: (m: SelectionMode) => void;
+  showSignalProcessing: boolean
+  setShowSignalProcessing: (v: boolean) => void
 
   // spetra
   selectedSpectra: Spectrum[];
@@ -35,6 +37,7 @@ type Ctx = {
   // Annotations 
   annotations: Annotation[]
   addAnnotation: (a: Annotation) => void
+  updateAnnotation: (id: string, patch: Partial<Annotation>) => void
   removeAnnotation: (id: string) => void
   clearProbePointsForDataset: (datasetId: string) => void
 
@@ -77,6 +80,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAnnotations(prev => prev.filter(a => a.id !== id))
   }, [])
 
+  const updateAnnotation = useCallback((id: string, patch: Partial<Annotation>) => {
+    setAnnotations(prev => prev.map(a => (a.id === id ? { ...a, ...patch, updatedAt: new Date().toISOString() } : a)))
+  }, [])
+
   const clearProbePointsForDataset = useCallback((datasetId: string) => {
     setAnnotations(prev =>
       prev.filter(a => !(a.datasetId === datasetId && a.kind === 'probe' && a.type === 'point'))
@@ -89,6 +96,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // new for selection one or multiple pixels in the image
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
+  const [showSignalProcessing, setShowSignalProcessing] = useState(false)
 
   const [selectedProbeGroupId, setSelectedProbeGroupId] = useState<string | null>(null)
   const [probeSpectraByGroupId, setProbeSpectraByGroupId] = useState<Record<string, Spectrum[]>>({})
@@ -153,6 +161,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Selection
     selectionMode,
     setSelectionMode,
+    showSignalProcessing,
+    setShowSignalProcessing,
 
     // Spectra
     selectedSpectra,
@@ -162,6 +172,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Annotations
     annotations,
     addAnnotation,
+    updateAnnotation,
     removeAnnotation,
     clearProbePointsForDataset,
 
@@ -185,8 +196,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     rgbBands,
     rgbImgUrl,
     selectionMode,
+    showSignalProcessing,
     selectedSpectra,
     annotations,
+    updateAnnotation,
     clearProbePointsForDataset,
     selectedRoiId,
     roiSpectraById,
