@@ -756,7 +756,6 @@ export default function PrimaryDisplay({
         <div className="placeholder">No layer visible</div>
       )}
 
-      <BandPicker />
     </section>
   )
 }

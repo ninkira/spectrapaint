@@ -122,6 +122,7 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 .body{
   display:grid;
 
+  flex: 1 1 auto;
   width: 100%;
   grid-template-columns: 56px 280px 1fr;
   grid-template-rows: 1fr;
@@ -204,7 +205,7 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 
 /* Layer Manager */
 .layer-manager{
-  background:var(--panel2); border-right:1px solid var(--border); display:flex; flex-direction:column; min-width:0;
+  background:var(--panel2); border-right:1px solid var(--border); display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden;
 }
 .lm-header{
   display:flex; align-items:center; justify-content:space-between;
@@ -213,7 +214,7 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 }
 .lm-actions button{width:28px; height:28px; border-radius:8px}
 .lm-actions button:hover{background:#151c27}
-.lm-list{padding:8px 8px 16px; overflow:auto; display:flex; flex-direction:column; gap:6px}
+.lm-list{padding:8px 8px 16px; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; display:flex; flex-direction:column; gap:6px}
 .lm-item{
   display:flex; align-items:center; gap:8px;
   padding:8px; border:1px solid var(--border); border-radius:10px; background:#0f1521;

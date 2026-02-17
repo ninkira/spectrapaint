@@ -3,7 +3,7 @@ import './App.css'
 import { AppProvider, useApp } from './state/AppContext'
 import Toolbar from './components/Toolbar'
 import ProjectNav from './components/ProjectNav'
-import LayerManager from './components/LayerManager'
+import DataManager from './components/LayerManager'
 import PrimaryDisplay from './components/PrimaryDisplay'
 import WorkArea from './components/WorkArea'
 
@@ -57,7 +57,7 @@ export default function App() {
         <Toolbar />
         <div className="body">
           <ProjectNav />
-          <LayerManager />
+          <DataManager />
           <ResizableContent />
         </div>
       </div>
