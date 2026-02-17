@@ -56,6 +56,7 @@ export default function PrimaryDisplay({
   const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
 
   const [probeGroupId, setProbeGroupId] = useState<string | null>(null)
+  const [, setLayoutVersion] = useState(0)
 
   useEffect(() => {
     if (selectionMode === 'multiple') {
@@ -64,6 +65,32 @@ export default function PrimaryDisplay({
       setProbeGroupId(null)
     }
   }, [selectionMode])
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current
+    const img = imgRef.current
+    if (!wrapper || !img) return
+
+    const bumpLayoutVersion = () => {
+      setLayoutVersion((v) => v + 1)
+    }
+
+    const observer = new ResizeObserver(() => {
+      bumpLayoutVersion()
+    })
+
+    observer.observe(wrapper)
+    observer.observe(img)
+
+    img.addEventListener('load', bumpLayoutVersion)
+    window.addEventListener('resize', bumpLayoutVersion)
+
+    return () => {
+      observer.disconnect()
+      img.removeEventListener('load', bumpLayoutVersion)
+      window.removeEventListener('resize', bumpLayoutVersion)
+    }
+  }, [rgbImgUrl, show])
 
 
   const CLOSE_RADIUS_PX = 10
@@ -178,19 +205,43 @@ export default function PrimaryDisplay({
 
 
 
-  // ---- helper: wrapper coords -> image coords ----
-  const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
+  const getImageDisplayMetrics = () => {
     const img = imgRef.current
     const wrapper = wrapperRef.current
     if (!img || !wrapper) return null
+    if (!img.naturalWidth || !img.naturalHeight) return null
 
-    const rect = wrapper.getBoundingClientRect()
-    const scaleX = img.naturalWidth / rect.width
-    const scaleY = img.naturalHeight / rect.height
+    const imgRect = img.getBoundingClientRect()
+    const wrapperRect = wrapper.getBoundingClientRect()
+    if (!imgRect.width || !imgRect.height) return null
 
     return {
-      x: Math.floor(display.x * scaleX),
-      y: Math.floor(display.y * scaleY),
+      width: imgRect.width,
+      height: imgRect.height,
+      offsetX: imgRect.left - wrapperRect.left,
+      offsetY: imgRect.top - wrapperRect.top,
+      naturalWidth: img.naturalWidth,
+      naturalHeight: img.naturalHeight,
+    }
+  }
+
+  // ---- helper: wrapper coords -> image coords ----
+  const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
+    const metrics = getImageDisplayMetrics()
+    if (!metrics) return null
+
+    const localX = display.x - metrics.offsetX
+    const localY = display.y - metrics.offsetY
+    if (localX < 0 || localY < 0 || localX > metrics.width || localY > metrics.height) {
+      return null
+    }
+
+    const scaleX = metrics.naturalWidth / metrics.width
+    const scaleY = metrics.naturalHeight / metrics.height
+
+    return {
+      x: Math.floor(localX * scaleX),
+      y: Math.floor(localY * scaleY),
     }
   }
 
@@ -267,15 +318,16 @@ export default function PrimaryDisplay({
   }
 
   const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
-    const img = imgRef.current
-    const wrapper = wrapperRef.current
-    if (!img || !wrapper) return null
+    const metrics = getImageDisplayMetrics()
+    if (!metrics) return null
 
-    const rect = wrapper.getBoundingClientRect()
-    const scaleX = rect.width / img.naturalWidth
-    const scaleY = rect.height / img.naturalHeight
+    const scaleX = metrics.width / metrics.naturalWidth
+    const scaleY = metrics.height / metrics.naturalHeight
 
-    return { x: imgPt.x * scaleX, y: imgPt.y * scaleY }
+    return {
+      x: metrics.offsetX + imgPt.x * scaleX,
+      y: metrics.offsetY + imgPt.y * scaleY,
+    }
   }
   const hasActiveDraft =
     dragStart !== null ||
