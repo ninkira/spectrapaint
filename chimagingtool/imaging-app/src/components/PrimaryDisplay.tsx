@@ -22,7 +22,7 @@ export default function PrimaryDisplay({
   onRegionSpectra,
 }: PrimaryDisplayProps) {
   const {
-    layers,
+    fileLayers,
     selectionMode, // 'single' | 'multiple' | 'rect' | 'ellipse' | 'line'  | 'polygon' 
     addSpectrum,
     rgbImgUrl,
@@ -33,15 +33,12 @@ export default function PrimaryDisplay({
     selectedRoiId,
     setRoiSpectraForId,
     setSelectedRoiId,
-    selectedProbeGroupId,
-    selectedProbePointId,
     probeSpectraByGroupId,
     setProbeSpectraForGroup,
-    setSelectedProbeGroupId,
-    setSelectedProbePointId
+    setSelectedProbeGroupId
   } = useApp()
 
-  const show = layers.find((l) => l.id === 'rgb')?.on
+  const show = fileLayers.some((l) => l.on)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   /* Circle/Retangle Selection */
@@ -56,7 +53,6 @@ export default function PrimaryDisplay({
   const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
 
   const [probeGroupId, setProbeGroupId] = useState<string | null>(null)
-  const [, setLayoutVersion] = useState(0)
 
   useEffect(() => {
     if (selectionMode === 'multiple') {
@@ -65,32 +61,6 @@ export default function PrimaryDisplay({
       setProbeGroupId(null)
     }
   }, [selectionMode])
-
-  useEffect(() => {
-    const wrapper = wrapperRef.current
-    const img = imgRef.current
-    if (!wrapper || !img) return
-
-    const bumpLayoutVersion = () => {
-      setLayoutVersion((v) => v + 1)
-    }
-
-    const observer = new ResizeObserver(() => {
-      bumpLayoutVersion()
-    })
-
-    observer.observe(wrapper)
-    observer.observe(img)
-
-    img.addEventListener('load', bumpLayoutVersion)
-    window.addEventListener('resize', bumpLayoutVersion)
-
-    return () => {
-      observer.disconnect()
-      img.removeEventListener('load', bumpLayoutVersion)
-      window.removeEventListener('resize', bumpLayoutVersion)
-    }
-  }, [rgbImgUrl, show])
 
 
   const CLOSE_RADIUS_PX = 10
@@ -121,21 +91,16 @@ export default function PrimaryDisplay({
   const addProbePoint = (x: number, y: number) => {
     if (!dataset) return
 
-    const id = crypto.randomUUID()
-    const defaultTitle = selectionMode === 'single' ? 'Probe' : 'Probe (multi)'
     addAnnotation({
-      id,
+      id: crypto.randomUUID(),
       datasetId: dataset.id,
       kind: 'probe',
       type: 'point',
       createdAt: new Date().toISOString(),
       geometry: { x, y },
-      label: defaultTitle,
-      title: defaultTitle,
-      description: '',
+      label: selectionMode === 'single' ? 'Probe' : 'Probe (multi)',
       ...(probeGroupId ? { groupId: probeGroupId } : {}),
     })
-    setSelectedProbePointId(id)
   }
 
   const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
@@ -159,8 +124,6 @@ export default function PrimaryDisplay({
       createdAt: new Date().toISOString(),
       geometry: { vertices: imgVerts },
       label: 'ROI',
-      title: 'ROI',
-      description: '',
     }
 
     addAnnotation(ann)
@@ -205,43 +168,19 @@ export default function PrimaryDisplay({
 
 
 
-  const getImageDisplayMetrics = () => {
+  // ---- helper: wrapper coords -> image coords ----
+  const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
     const img = imgRef.current
     const wrapper = wrapperRef.current
     if (!img || !wrapper) return null
-    if (!img.naturalWidth || !img.naturalHeight) return null
 
-    const imgRect = img.getBoundingClientRect()
-    const wrapperRect = wrapper.getBoundingClientRect()
-    if (!imgRect.width || !imgRect.height) return null
-
-    return {
-      width: imgRect.width,
-      height: imgRect.height,
-      offsetX: imgRect.left - wrapperRect.left,
-      offsetY: imgRect.top - wrapperRect.top,
-      naturalWidth: img.naturalWidth,
-      naturalHeight: img.naturalHeight,
-    }
-  }
-
-  // ---- helper: wrapper coords -> image coords ----
-  const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
-    const metrics = getImageDisplayMetrics()
-    if (!metrics) return null
-
-    const localX = display.x - metrics.offsetX
-    const localY = display.y - metrics.offsetY
-    if (localX < 0 || localY < 0 || localX > metrics.width || localY > metrics.height) {
-      return null
-    }
-
-    const scaleX = metrics.naturalWidth / metrics.width
-    const scaleY = metrics.naturalHeight / metrics.height
+    const rect = wrapper.getBoundingClientRect()
+    const scaleX = img.naturalWidth / rect.width
+    const scaleY = img.naturalHeight / rect.height
 
     return {
-      x: Math.floor(localX * scaleX),
-      y: Math.floor(localY * scaleY),
+      x: Math.floor(display.x * scaleX),
+      y: Math.floor(display.y * scaleY),
     }
   }
 
@@ -318,16 +257,15 @@ export default function PrimaryDisplay({
   }
 
   const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
-    const metrics = getImageDisplayMetrics()
-    if (!metrics) return null
+    const img = imgRef.current
+    const wrapper = wrapperRef.current
+    if (!img || !wrapper) return null
 
-    const scaleX = metrics.width / metrics.naturalWidth
-    const scaleY = metrics.height / metrics.naturalHeight
+    const rect = wrapper.getBoundingClientRect()
+    const scaleX = rect.width / img.naturalWidth
+    const scaleY = rect.height / img.naturalHeight
 
-    return {
-      x: metrics.offsetX + imgPt.x * scaleX,
-      y: metrics.offsetY + imgPt.y * scaleY,
-    }
+    return { x: imgPt.x * scaleX, y: imgPt.y * scaleY }
   }
   const hasActiveDraft =
     dragStart !== null ||
@@ -469,8 +407,6 @@ export default function PrimaryDisplay({
           createdAt: new Date().toISOString(),
           geometry: { x, y, w, h },
           label: 'ROI',
-          title: 'ROI',
-          description: '',
         }
       }
 
@@ -488,8 +424,6 @@ export default function PrimaryDisplay({
             ry: h / 2,
           },
           label: 'ROI',
-          title: 'ROI',
-          description: '',
         }
 
       }
@@ -517,27 +451,16 @@ export default function PrimaryDisplay({
       if (!res.ok) {
         console.error('Failed to fetch region spectra', await res.text())
       } else {
-        const data = (await res.json()) as {
-          wavelengths_nm: number[]
-          region_spectra: Array<{ x: number; y: number; values: number[] }>
-          region_stats?: { n_pixels: number; mean: number[]; std: number[] }
-        }
+        const data = (await res.json()) as { spectra: Spectrum[] }
 
-        const spectra: Spectrum[] = Array.isArray(data.region_spectra)
-          ? data.region_spectra.map((s) => ({
-            x: s.x,
-            y: s.y,
-            values: s.values,
-            wavelengths_nm: data.wavelengths_nm,
-          }))
-          : []
-
-        if (onRegionSpectra && spectra.length > 0) {
-          onRegionSpectra(spectra)
+        if (onRegionSpectra && Array.isArray(data.spectra)) {
+          onRegionSpectra(data.spectra)
         }
-        if (ann && spectra.length > 0) {
-          setRoiSpectraForId(ann.id, spectra)
+        if (ann && Array.isArray(data.spectra)) {
+          setRoiSpectraForId(ann.id, data.spectra)
           setSelectedRoiId(ann.id)
+
+
         }
       }
     } catch (err) {
@@ -675,13 +598,11 @@ export default function PrimaryDisplay({
                 cy={p.y}
                 r={5}
                 fill="white"
-                stroke={a.id === selectedProbePointId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedProbePointId ? 3 : 2}
-                onClick={() => {
-                  setSelectedProbeGroupId(a.groupId ?? null)
-                  setSelectedProbePointId(a.id)
-                }}
+                stroke={a.groupId === selectedProbeGroupId ? 'lime' : 'red'}
+                strokeWidth={a.groupId === selectedProbeGroupId ? 3 : 2}
+                onClick={() => setSelectedProbeGroupId(a.groupId ?? null)}
                 style={{ cursor: 'pointer' }}
+
               />
             )
           }

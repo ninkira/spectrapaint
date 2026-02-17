@@ -1,6 +1,12 @@
 export type DatasetMeta = {
-  id: string; name: string; width: number; height: number; wavelengths_nm: number[];
-};
+  id: string
+  name: string
+  type: 'hsi' | 'tiff' | 'png'
+  path: string
+  width: number
+  height: number
+  wavelengths_nm: number[] | null
+}
 
 const base = '/api';
 
@@ -12,3 +18,5 @@ export async function listDatasets(): Promise<DatasetMeta[]> {
 
 export const rgbUrl = (id: string, r: number, g: number, b: number, stretch='percent_2') =>
   `${base}/datasets/${id}/rgb?r=${r}&g=${g}&b=${b}&stretch=${stretch}`;
+
+export const visualUrl = (id: string) => `${base}/datasets/${id}/visual`;

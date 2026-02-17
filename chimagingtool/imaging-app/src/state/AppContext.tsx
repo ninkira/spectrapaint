@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { listDatasets, rgbUrl } from '../lib/api';
+import { listDatasets, rgbUrl, visualUrl } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import { useCallback } from 'react'
+import type { Spectrum } from '../components/hsi_tools/SpectrumPlot'
+import type { Layer } from './types'
 
 
 type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' | 'polygon'
@@ -10,7 +12,7 @@ type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' | 'poly
 
 type Ctx = {
   // Layers
-  layers: Layer[];
+  fileLayers: Layer[];
   toggleLayer: (id: string) => void;
 
   // dataset
@@ -62,12 +64,22 @@ const Ctx = createContext<Ctx>(null as any);
 export const useApp = () => useContext(Ctx);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [layers, setLayers] = useState<Layer[]>([{ id: 'rgb', name: 'Hyperspectral Image', on: true }]);
+
   const [datasets, setDatasets] = useState<DatasetMeta[]>([]);
-  const [datasetId, setDatasetId] = useState<string>();
   const [dataset, setDataset] = useState<DatasetMeta>();
+
+  const [datasetId, setDatasetId] = useState<string>();
+
+  const fileLayers = useMemo(() => datasets.map(ds => ({
+    id: ds.id,
+    name: ds.path.split('/').pop() ?? ds.name,
+    path: ds.path,
+    type: ds.type,
+    on: ds.id === datasetId,
+  })), [datasets, datasetId])
   const [rgbBands, setRgbBandsState] = useState({ r: 650, g: 550, b: 450 });
   const [rgbImgUrl, setRgbImgUrl] = useState<string>();
+
 
   // Annotations - based on selected ROI
   const [annotations, setAnnotations] = useState<Annotation[]>([])
@@ -92,7 +104,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
 
   // Select the annotation / ROI
-  const toggleLayer = (id: string) => setLayers(ls => ls.map(l => l.id === id ? { ...l, on: !l.on } : l));
+  const toggleLayer = (id: string) => setDatasetId(id)
 
   // new for selection one or multiple pixels in the image
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
@@ -137,14 +149,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!datasetId) return;
     const d = datasets.find(x => x.id === datasetId);
     setDataset(d);
-    // cache-buster so the <img> updates when bands change
-    const u = rgbUrl(datasetId, rgbBands.r, rgbBands.g, rgbBands.b) + `&t=${Date.now()}`;
-    setRgbImgUrl(u);
-  }, [datasetId, datasets, rgbBands]);
+  }, [datasetId, datasets]);
+
+  useEffect(() => {
+    if (!datasetId || !dataset) return
+
+    const cacheBuster = `&t=${Date.now()}`
+    if (dataset.type === 'hsi') {
+      const u = rgbUrl(datasetId, rgbBands.r, rgbBands.g, rgbBands.b) + cacheBuster
+      setRgbImgUrl(u)
+      return
+    }
+
+    const u = `${visualUrl(datasetId)}?t=${Date.now()}`
+    setRgbImgUrl(u)
+  }, [datasetId, dataset, rgbBands]);
 
   const ctxValue: Ctx = useMemo(() => ({
     // Layers
-    layers,
+    fileLayers,
     toggleLayer,
 
     // Dataset
@@ -190,7 +213,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedProbePointId,
 
   }), [
-    layers,
+    fileLayers,
     dataset,
     datasetId,
     rgbBands,

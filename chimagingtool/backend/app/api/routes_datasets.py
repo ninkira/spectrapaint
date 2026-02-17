@@ -1,9 +1,8 @@
-import os
-
 import io
+import os
 from pathlib import Path
-from PIL import Image
-from fastapi import APIRouter, Query, Response, HTTPException
+
+from fastapi import APIRouter, HTTPException, Query, Response
 from PIL import Image
 
 
@@ -13,6 +12,8 @@ from ..services.dataset_store import get_dataset_record_or_404, registry
 from ..services.image_ops import percent_stretch, png_bytes
 
 router = APIRouter()
+DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
+PROJECT_ROOT = DATA_ROOT / "old_man"
 
 # for loading visualisations created in third-party-software
 SUPPORTED_VISUAL_EXTS = {".tif", ".tiff", ".png"}
@@ -68,6 +69,14 @@ def _read_visual_size(path: str) -> tuple[int, int]:
     with Image.open(path) as im:
         return im.width, im.height
 
+
+def _to_relative_project_path(path: str) -> str:
+    p = Path(path).resolve()
+    try:
+        return p.relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return p.as_posix()
+
 # General calls
 @router.get("/datasets", response_model=list[DatasetMeta])
 def list_datasets():
@@ -84,11 +93,13 @@ def list_datasets():
                 continue
             img = open_envi(hdr)
             md = read_metadata(img)
+            path = _to_relative_project_path(hdr)
             out.append(
                 DatasetMeta(
                     id=id_,
                     name=name,
                     type="hsi",
+                    path=path,
                     width=md["width"],
                     height=md["height"],
                     wavelengths_nm=md["wavelengths_nm"],
@@ -103,11 +114,13 @@ def list_datasets():
             width, height = _read_visual_size(visual_path)
             ext = Path(visual_path).suffix.lower()
             vtype = "tiff" if ext in (".tif", ".tiff") else "png"
+            path = _to_relative_project_path(visual_path)
             out.append(
                 DatasetMeta(
                     id=id_,
                     name=name,
                     type=vtype,
+                    path=path,
                     width=width,
                     height=height,
                     wavelengths_nm=None,
@@ -120,7 +133,10 @@ def list_datasets():
 @router.get("/datasets/{id}/thumbnail")
 def thumbnail(id: str, scale: int = Query(8, ge=1)):
     rec = get_dataset_record_or_404(id)
-    img = open_envi(rec["envi_hdr"])
+    hdr = rec.get("envi_hdr")
+    if not hdr:
+        raise HTTPException(status_code=400, detail="Thumbnail endpoint supports HSI datasets only")
+    img = open_envi(hdr)
     md = read_metadata(img)
     cube = load_cube(img)
     wl = md["wavelengths_nm"]
@@ -132,7 +148,10 @@ def thumbnail(id: str, scale: int = Query(8, ge=1)):
 @router.get("/datasets/{id}/rgb")
 def rgb(id: str, r: float = 650, g: float = 550, b: float = 450, stretch: str = "percent_2"):
     rec = get_dataset_record_or_404(id)
-    img = open_envi(rec["envi_hdr"])
+    hdr = rec.get("envi_hdr")
+    if not hdr:
+        raise HTTPException(status_code=400, detail="RGB endpoint supports HSI datasets only")
+    img = open_envi(hdr)
     md = read_metadata(img)
     cube = load_cube(img)
     wl = md["wavelengths_nm"]

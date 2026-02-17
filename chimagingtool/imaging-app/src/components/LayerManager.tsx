@@ -1,7 +1,7 @@
 import { useApp } from '../state/AppContext'
 
 export default function LayerManager() {
-  const { layers, toggleLayer } = useApp()
+  const { fileLayers, toggleLayer } = useApp()
 
   return (
     <aside className="layer-manager">
@@ -15,7 +15,7 @@ export default function LayerManager() {
       </div>
 
       <div className="lm-list" role="tree">
-        {layers.map(l => (
+        {fileLayers.map(l => (
           <label key={l.id} className="lm-item" role="treeitem">
             <input
               type="checkbox"

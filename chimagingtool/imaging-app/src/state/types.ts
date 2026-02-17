@@ -1,1 +1,7 @@
-export type Layer = { id: number; name: string; on: boolean }
+export type Layer = {
+  id: string
+  name: string
+  on: boolean
+  path?: string
+  type?: 'hsi' | 'tiff' | 'png'
+}
