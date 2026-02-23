@@ -1,5 +1,6 @@
 import io
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -16,7 +17,7 @@ DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 PROJECT_ROOT = DATA_ROOT / "old_man"
 
 # for loading visualisations created in third-party-software
-SUPPORTED_VISUAL_EXTS = {".tif", ".tiff", ".png"}
+SUPPORTED_VISUAL_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 
 
 def is_visual_file(path: str) -> bool:
@@ -25,7 +26,7 @@ def is_visual_file(path: str) -> bool:
 
 def read_visual_metadata(path: str) -> dict:
     """
-    Opens TIFF/PNG and returns basic metadata (width/height).
+    Opens TIFF/PNG/JPEG and returns basic metadata (width/height).
     """
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -43,7 +44,7 @@ def read_visual_metadata(path: str) -> dict:
 
 def visual_to_png_bytes(path: str) -> bytes:
     """
-    Opens TIFF/PNG and converts to PNG bytes for browser display.
+    Opens TIFF/PNG/JPEG and converts to PNG bytes for browser display.
     """
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -62,6 +63,51 @@ def visual_to_png_bytes(path: str) -> bytes:
             return buf.getvalue()
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not render image: {exc}") from exc
+
+
+def _resize_to_max_width(im: Image.Image, max_w: int | None) -> Image.Image:
+    if not max_w or max_w <= 0:
+        return im
+    if im.width <= max_w:
+        return im
+    scale = max_w / float(im.width)
+    new_h = max(1, int(im.height * scale))
+    return im.resize((max_w, new_h), Image.Resampling.LANCZOS)
+
+
+def _mtime_ns(path: str) -> int:
+    return os.stat(path).st_mtime_ns
+
+
+@lru_cache(maxsize=256)
+def _cached_visual_png_bytes(path: str, path_mtime_ns: int, max_w: int | None) -> bytes:
+    del path_mtime_ns  # part of cache key for invalidation on file changes
+    with Image.open(path) as im:
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGB")
+        im = _resize_to_max_width(im, max_w)
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return buf.getvalue()
+
+
+@lru_cache(maxsize=128)
+def _cached_hsi_rgb_bytes(
+    hdr_path: str,
+    hdr_mtime_ns: int,
+    r: float,
+    g: float,
+    b: float,
+    stretch: str,
+) -> bytes:
+    del hdr_mtime_ns  # part of cache key for invalidation on file changes
+    img = open_envi(hdr_path)
+    md = read_metadata(img)
+    cube = load_cube(img)
+    wl = md["wavelengths_nm"]
+    rgb = extract_rgb(cube, wl, r, g, b)
+    rgb8 = percent_stretch(rgb) if stretch.startswith("percent") else rgb.astype("uint8")
+    return png_bytes(rgb8)
 
 
 
@@ -87,6 +133,7 @@ def list_datasets():
         hdr = rec.get("envi_hdr")
         tiff = rec.get("tiff")
         png = rec.get("png")
+        jpg = rec.get("jpg")
 
         if hdr:
             if not os.path.exists(hdr):
@@ -107,13 +154,18 @@ def list_datasets():
             )
             continue
 
-        visual_path = tiff or png
+        visual_path = tiff or png or jpg
         if visual_path:
             if not os.path.exists(visual_path):
                 continue
             width, height = _read_visual_size(visual_path)
             ext = Path(visual_path).suffix.lower()
-            vtype = "tiff" if ext in (".tif", ".tiff") else "png"
+            if ext in (".tif", ".tiff"):
+                vtype = "tiff"
+            elif ext == ".png":
+                vtype = "png"
+            else:
+                vtype = "jpg"
             path = _to_relative_project_path(visual_path)
             out.append(
                 DatasetMeta(
@@ -151,19 +203,16 @@ def rgb(id: str, r: float = 650, g: float = 550, b: float = 450, stretch: str = 
     hdr = rec.get("envi_hdr")
     if not hdr:
         raise HTTPException(status_code=400, detail="RGB endpoint supports HSI datasets only")
-    img = open_envi(hdr)
-    md = read_metadata(img)
-    cube = load_cube(img)
-    wl = md["wavelengths_nm"]
-    rgb = extract_rgb(cube, wl, r, g, b)
-    rgb8 = percent_stretch(rgb) if stretch.startswith("percent") else rgb.astype("uint8")
-    return Response(content=png_bytes(rgb8), media_type="image/png")
+    content = _cached_hsi_rgb_bytes(hdr, _mtime_ns(hdr), r, g, b, stretch)
+    return Response(content=content, media_type="image/png")
 
 @router.get("/datasets/{id}/visual")
-def visual(id: str):
+def visual(id: str, max_w: int | None = Query(default=None, ge=64, le=8192)):
     rec = get_dataset_record_or_404(id)
-    visual_path = rec.get("tiff") or rec.get("png")
+    visual_path = rec.get("tiff") or rec.get("png") or rec.get("jpg")
     if not visual_path:
-        raise HTTPException(status_code=404, detail="No TIFF/PNG visual for this dataset")
-
-    return Response(content=visual_to_png_bytes(visual_path), media_type="image/png")
+        raise HTTPException(status_code=404, detail="No TIFF/PNG/JPEG visual for this dataset")
+    if not is_visual_file(visual_path):
+        raise HTTPException(status_code=400, detail=f"Unsupported visual file type: {visual_path}")
+    content = _cached_visual_png_bytes(visual_path, _mtime_ns(visual_path), max_w)
+    return Response(content=content, media_type="image/png")

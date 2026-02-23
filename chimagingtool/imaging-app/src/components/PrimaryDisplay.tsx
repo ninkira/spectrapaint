@@ -33,12 +33,14 @@ export default function PrimaryDisplay({
     selectedRoiId,
     setRoiSpectraForId,
     setSelectedRoiId,
+    selectedProbeGroupId,
     probeSpectraByGroupId,
     setProbeSpectraForGroup,
     setSelectedProbeGroupId
   } = useApp()
 
   const show = fileLayers.some((l) => l.on)
+  const isHsiDataset = dataset?.type === 'hsi'
   const imgRef = useRef<HTMLImageElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   /* Circle/Retangle Selection */
@@ -128,6 +130,13 @@ export default function PrimaryDisplay({
 
     addAnnotation(ann)
 
+    if (!isHsiDataset) {
+      setSelectedRoiId(ann.id)
+      setDraftVertices(null)
+      setDraftHover(null)
+      return
+    }
+
     void (async () => {
       const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
 
@@ -175,12 +184,20 @@ export default function PrimaryDisplay({
     if (!img || !wrapper) return null
 
     const rect = wrapper.getBoundingClientRect()
+    if (!img.naturalWidth || !img.naturalHeight) return null
+    if (!rect.width || !rect.height) return null
+
     const scaleX = img.naturalWidth / rect.width
     const scaleY = img.naturalHeight / rect.height
+    if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) return null
+
+    const x = Math.floor(display.x * scaleX)
+    const y = Math.floor(display.y * scaleY)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
     return {
-      x: Math.floor(display.x * scaleX),
-      y: Math.floor(display.y * scaleY),
+      x,
+      y,
     }
   }
 
@@ -230,6 +247,14 @@ export default function PrimaryDisplay({
     const imgCoords = toImageCoords(displayPt)
     if (!imgCoords || !dataset) return
 
+    if (!isHsiDataset) {
+      if (selectionMode === 'single') {
+        clearProbePointsForDataset(dataset.id)
+      }
+      addProbePoint(imgCoords.x, imgCoords.y)
+      return
+    }
+
     // fetch spectrum
     const spec = await fetchSpectrumAtImagePoint(imgCoords.x, imgCoords.y)
     if (!spec) return
@@ -262,10 +287,18 @@ export default function PrimaryDisplay({
     if (!img || !wrapper) return null
 
     const rect = wrapper.getBoundingClientRect()
+    if (!img.naturalWidth || !img.naturalHeight) return null
+    if (!rect.width || !rect.height) return null
+
     const scaleX = rect.width / img.naturalWidth
     const scaleY = rect.height / img.naturalHeight
+    if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) return null
 
-    return { x: imgPt.x * scaleX, y: imgPt.y * scaleY }
+    const x = imgPt.x * scaleX
+    const y = imgPt.y * scaleY
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+
+    return { x, y }
   }
   const hasActiveDraft =
     dragStart !== null ||
@@ -430,6 +463,13 @@ export default function PrimaryDisplay({
       if (ann) addAnnotation(ann)
     }
 
+    if (!isHsiDataset) {
+      if (ann) setSelectedRoiId(ann.id)
+      setDragStart(null)
+      setDragCurrent(null)
+      return
+    }
+
 
     if (!topLeftImg || !bottomRightImg) {
       setDragStart(null)
@@ -451,16 +491,29 @@ export default function PrimaryDisplay({
       if (!res.ok) {
         console.error('Failed to fetch region spectra', await res.text())
       } else {
-        const data = (await res.json()) as { spectra: Spectrum[] }
-
-        if (onRegionSpectra && Array.isArray(data.spectra)) {
-          onRegionSpectra(data.spectra)
+        const data = (await res.json()) as {
+          wavelengths_nm?: number[]
+          spectra?: Spectrum[]
+          region_spectra?: Array<{ x: number; y: number; values: number[] }>
         }
-        if (ann && Array.isArray(data.spectra)) {
-          setRoiSpectraForId(ann.id, data.spectra)
+
+        const spectra: Spectrum[] = Array.isArray(data.spectra)
+          ? data.spectra
+          : Array.isArray(data.region_spectra)
+            ? data.region_spectra.map((s) => ({
+              x: s.x,
+              y: s.y,
+              values: s.values,
+              wavelengths_nm: data.wavelengths_nm ?? [],
+            }))
+            : []
+
+        if (onRegionSpectra && spectra.length > 0) {
+          onRegionSpectra(spectra)
+        }
+        if (ann && spectra.length > 0) {
+          setRoiSpectraForId(ann.id, spectra)
           setSelectedRoiId(ann.id)
-
-
         }
       }
     } catch (err) {
@@ -737,7 +790,7 @@ export default function PrimaryDisplay({
               width: '100%',
               height: 'auto',
               display: 'block',
-              cursor: (isBoxMode || isPolygonLikeMode) ? 'crosshair' : 'pointer',
+              cursor: isHsiDataset && (isBoxMode || isPolygonLikeMode) ? 'crosshair' : 'pointer',
             }}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
@@ -756,7 +809,8 @@ export default function PrimaryDisplay({
         <div className="placeholder">No layer visible</div>
       )}
 
-      <BandPicker />
+      {isHsiDataset ? <BandPicker /> : null}
+
     </section>
   )
 }

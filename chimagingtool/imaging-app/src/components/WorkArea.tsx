@@ -12,6 +12,7 @@ export default function WorkArea() {
     selectionMode,
     showSignalProcessing,
     dataset,
+    selectedSpectra: globalSelectedSpectra,
     selectedRoiId,
     roiSpectraById,
     selectedProbePointId,
@@ -28,16 +29,25 @@ export default function WorkArea() {
   const [annotationDescription, setAnnotationDescription] = useState('')
 
   const isRegionMode =
-    selectionMode === 'rect' || selectionMode === 'ellipse'
+    selectionMode === 'rect' || selectionMode === 'ellipse' || selectionMode === 'polygon'
   const isMultiPixelMode =
     selectionMode === 'multiple' || selectionMode === 'line'
 
-  const selectedSpectra =
-    selectionMode === 'multiple' && selectedProbeGroupId
-      ? probeSpectraByGroupId[selectedProbeGroupId] ?? []
-      : selectedRoiId
-        ? roiSpectraById[selectedRoiId] ?? []
-        : []
+  const selectedSpectra = useMemo(() => {
+    if (selectionMode === 'single') {
+      return spectrum ? [spectrum] : globalSelectedSpectra
+    }
+    if (selectionMode === 'multiple' && selectedProbeGroupId) {
+      return probeSpectraByGroupId[selectedProbeGroupId] ?? []
+    }
+    if (selectionMode === 'multiple') {
+      return globalSelectedSpectra
+    }
+    if (selectedRoiId) {
+      return roiSpectraById[selectedRoiId] ?? []
+    }
+    return regionSpectra.length ? regionSpectra : globalSelectedSpectra
+  }, [selectionMode, spectrum, globalSelectedSpectra, selectedProbeGroupId, probeSpectraByGroupId, selectedRoiId, roiSpectraById, regionSpectra])
 
   const activeAnnotationId = selectedRoiId ?? selectedProbePointId
   const activeAnnotation = useMemo(
@@ -66,7 +76,9 @@ export default function WorkArea() {
 
   if (showSignalProcessing) {
     const title =
-      isMultiPixelMode
+      selectionMode === 'single'
+        ? 'Single pixel spectrum'
+        : isMultiPixelMode
         ? 'Multiple spectra (clicked pixels)'
         : isRegionMode
           ? 'Region spectra (rectangle / ellipse)'

@@ -153,15 +153,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!datasetId || !dataset) return
-
-    const cacheBuster = `&t=${Date.now()}`
     if (dataset.type === 'hsi') {
-      const u = rgbUrl(datasetId, rgbBands.r, rgbBands.g, rgbBands.b) + cacheBuster
+      const u = rgbUrl(datasetId, rgbBands.r, rgbBands.g, rgbBands.b)
       setRgbImgUrl(u)
       return
     }
 
-    const u = `${visualUrl(datasetId)}?t=${Date.now()}`
+    const targetWidth =
+      typeof window !== 'undefined'
+        ? Math.max(900, Math.round(window.innerWidth * 0.65))
+        : undefined
+    const u = visualUrl(datasetId, targetWidth)
     setRgbImgUrl(u)
   }, [datasetId, dataset, rgbBands]);
 

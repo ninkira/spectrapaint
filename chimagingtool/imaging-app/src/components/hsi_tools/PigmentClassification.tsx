@@ -8,8 +8,18 @@ interface PigmentClassificationModalProps {
   title: string
   onClose: () => void
   children?: React.ReactNode
+  datasetId: string | null
   selectedRoiId: string | null
   roiSpectraById: Record<string, Spectrum[]>
+}
+
+type TopMatch = {
+  rank: number
+  pigment_name: string
+  label_name?: string
+  label_group?: string
+  score: number
+  values: number[]
 }
 
 const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
@@ -17,41 +27,88 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
   title,
   onClose,
   children,
+  datasetId,
   selectedRoiId,
   roiSpectraById,
 }) => {
   const [methods, setMethods] = useState<{ id: string; label: string }[]>([])
-  const [methodId, setMethodId] = useState('')
+  const [libraries, setLibraries] = useState<{ id: string; label: string }[]>([])
+  const [classificationMethodId, setClassificationMethodId] = useState('')
+  const [referenceLibraryId, setReferenceLibraryId] = useState('')
   const [isRunning, setIsRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [resultJson, setResultJson] = useState<string | null>(null)
+  const [topMatches, setTopMatches] = useState<TopMatch[]>([])
+  const [libraryWavelengths, setLibraryWavelengths] = useState<number[]>([])
 
   useEffect(() => {
     if (!isOpen) return
 
-    const loadMethods = async () => {
+    const loadOptions = async () => {
       try {
         setError(null)
-        const r = await fetch('/api/classification/methods')
-        if (!r.ok) throw new Error(`Methods failed (${r.status})`)
-        const data = await r.json()
-        const loaded = data.methods ?? []
-        setMethods(loaded)
-        setMethodId(loaded[0]?.id ?? '')
+        const [methodsRes, libsRes] = await Promise.all([
+          fetch('/api/classification/methods'),
+          fetch('/api/classification/libraries'),
+        ])
+        if (!methodsRes.ok) throw new Error(`Methods failed (${methodsRes.status})`)
+        if (!libsRes.ok) throw new Error(`Libraries failed (${libsRes.status})`)
+
+        const methodsData = await methodsRes.json()
+        const libsData = await libsRes.json()
+
+        const loadedMethods = methodsData.methods ?? []
+        const loadedLibs = (libsData.libraries ?? []).map((lib: { id: string; label: string }) => ({
+          id: lib.id,
+          label: lib.label,
+        }))
+
+        setMethods(loadedMethods)
+        setLibraries(loadedLibs)
+        setClassificationMethodId(loadedMethods[0]?.id ?? '')
+        setReferenceLibraryId(loadedLibs[0]?.id ?? '')
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load methods')
+        setError(e instanceof Error ? e.message : 'Failed to load classification options')
       }
     }
 
-    loadMethods()
+    loadOptions()
   }, [isOpen])
+
+  const selectedSpectra = selectedRoiId ? (roiSpectraById[selectedRoiId] ?? []) : []
+
+  const computeMeanSignal = (spectra: Spectrum[]) => {
+    const nonNull = spectra.filter((s): s is Exclude<Spectrum, null> => !!s)
+    if (!nonNull.length) return null
+    const wavelengths = nonNull[0].wavelengths_nm
+    const nBands = wavelengths.length
+    const sums = new Array(nBands).fill(0)
+
+    for (const s of nonNull) {
+      if (s.values.length !== nBands) return null
+      for (let i = 0; i < nBands; i += 1) sums[i] += s.values[i]
+    }
+
+    const meanValues = sums.map((v) => v / nonNull.length)
+    return { wavelengths_nm: wavelengths, values: meanValues }
+  }
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!selectedRoiId || !methodId) return
+    if (!datasetId || !selectedRoiId || !classificationMethodId || !referenceLibraryId) return
+
+    const meanSignal = computeMeanSignal(selectedSpectra)
+    if (!meanSignal) {
+      setError('No valid ROI spectra available for classification.')
+      return
+    }
 
     try {
       setIsRunning(true)
       setError(null)
+      setResultJson(null)
+      setTopMatches([])
+      setLibraryWavelengths([])
 
       const res = await fetch('/api/classification/pipeline/run', {
         method: 'POST',
@@ -59,22 +116,35 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
         body: JSON.stringify({
           dataset_id: datasetId,
           roi_id: selectedRoiId,
-          preprocessing_method_id: preprocessingMethodId,
+          preprocessing_method_id: null,
           classification_method_id: classificationMethodId,
           reference_library_id: referenceLibraryId,
-          mean_signal: { wavelengths_nm, values: meanValues },
+          mean_signal: meanSignal,
           top_k: 5
         }),
       })
 
       if (!res.ok) throw new Error(`Run failed (${res.status})`)
-      // TODO: handle response payload if needed
+      const data = await res.json()
+      setResultJson(JSON.stringify(data, null, 2))
+      const matches = (data?.results?.top_matches ?? []) as TopMatch[]
+      const wl = Array.isArray(data?.library?.wavelengths_nm)
+        ? (data.library.wavelengths_nm as number[])
+        : []
+      setTopMatches(matches)
+      setLibraryWavelengths(wl)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error')
     } finally {
       setIsRunning(false)
     }
   }
+
+  const comparisonSpectra = topMatches.map((m) => ({
+    name: `${m.rank}. ${m.label_name ?? m.pigment_name}`,
+    values: m.values,
+    wavelengths_nm: libraryWavelengths.length ? libraryWavelengths : undefined,
+  }))
 
   if (!isOpen) return null
 
@@ -101,7 +171,11 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
         <div>
           {children}
           <h3>Result Display</h3>
-          <SpectrumPlot spectra={selectedRoiId ? (roiSpectraById[selectedRoiId] ?? []) : []} />
+          <SpectrumPlot
+            spectra={selectedSpectra}
+            comparisonSpectra={comparisonSpectra}
+            title="ROI mean and identified pigment signals"
+          />
         </div>
 
         <form
@@ -114,36 +188,58 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
         >
           <h2>Pigment Classification Options</h2>
           <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-            Preprocessing Method
-            <select value={methodId} onChange={(e) => setMethodId(e.target.value)}>
+            Analysis Method
+            <select value={classificationMethodId} onChange={(e) => setClassificationMethodId(e.target.value)}>
               {methods.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
           </label>
-
-
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-            Analysis Method
-            <select value={methodId} onChange={(e) => setMethodId(e.target.value)}>
-              {methods.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
+            Reference Library
+            <select value={referenceLibraryId} onChange={(e) => setReferenceLibraryId(e.target.value)}>
+              {libraries.map((l) => (
+                <option key={l.id} value={l.id}>{l.label}</option>
               ))}
             </select>
           </label>
 
-          <button type="submit" disabled={isRunning || !selectedRoiId || !methodId}>
+          <button type="submit" disabled={isRunning || !datasetId || !selectedRoiId || !classificationMethodId || !referenceLibraryId}>
             {isRunning ? 'Running...' : 'Run classification'}
           </button>
 
           {error && <div style={{ color: 'crimson' }}>{error}</div>}
+          {topMatches.length > 0 && (
+            <section
+              aria-label="Top 3 classification matches"
+              style={{
+                border: '1px solid #ddd',
+                borderRadius: 6,
+                padding: '0.5rem 0.75rem',
+                background: '#fafafa',
+              }}
+            >
+              <h3 style={{ margin: '0 0 0.5rem 0', fontSize: 14 }}>Top 3 Matches</h3>
+              <ol style={{ margin: 0, paddingLeft: '1.1rem' }}>
+                {topMatches.slice(0, 3).map((m) => (
+                  <li key={`${m.rank}-${m.pigment_name}`} style={{ marginBottom: '0.4rem' }}>
+                    <strong>{m.label_name ?? m.pigment_name}</strong>
+                    {m.label_group ? ` (${m.label_group})` : ''} - score {m.score.toFixed(4)}
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+          {resultJson && (
+            <pre style={{ margin: 0, fontSize: 12, background: '#f4f4f4', padding: '0.5rem', borderRadius: 6, maxHeight: 240, overflow: 'auto' }}>
+              {resultJson}
+            </pre>
+          )}
         </form>
       </div>
     </InfoModal>
   )
-
-
 }
 
 export default PigmentClassificationModal

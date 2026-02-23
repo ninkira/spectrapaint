@@ -11,6 +11,7 @@ PROJECT_ID = "old_man"
 PROJECT_DIR = DATA_DIR / PROJECT_ID
 PROJECT_REGISTRY_FILE = PROJECT_DIR / "registry.json"
 HSI_ROOT = PROJECT_DIR / "hsi"
+VISUAL_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 
 
 def _to_title(text: str) -> str:
@@ -48,19 +49,14 @@ def _build_auto_registry() -> dict[str, Any]:
     project_name = project_meta.get("name", _to_title(PROJECT_ID))
 
     out: dict[str, Any] = {}
-    if not HSI_ROOT.exists():
+    if not PROJECT_DIR.exists():
         return out
 
-    # Scan HSI tree only (skip spectral libraries / other sources).
-    for hdr_path in sorted(HSI_ROOT.rglob("*.hdr")):
-        rel = hdr_path.relative_to(HSI_ROOT)
+    # 1) HSI records (from the HSI source tree only).
+    for hdr_path in sorted(HSI_ROOT.rglob("*.hdr")) if HSI_ROOT.exists() else []:
+        rel = hdr_path.relative_to(PROJECT_DIR)
         stem = hdr_path.stem
-
-        # Stable id: filename stem, fallback to path-based id on collisions.
-        dataset_id = stem
-        if dataset_id in out:
-            dataset_id = rel.with_suffix("").as_posix().replace("/", "__")
-
+        dataset_id = rel.with_suffix("").as_posix().replace("/", "__")
         meta = datasets_meta.get(dataset_id, {}) if isinstance(datasets_meta, dict) else {}
         default_name = f"{project_name} - {_to_title(stem)}"
 
@@ -71,6 +67,42 @@ def _build_auto_registry() -> dict[str, Any]:
             "envi_hdr": str(hdr_path),
             "thumbnail": meta.get("thumbnail"),
         }
+
+    # 2) Visual records (TIFF/PNG), skip folders not intended as dataset layers.
+    for vis_path in sorted(PROJECT_DIR.rglob("*")):
+        if not vis_path.is_file():
+            continue
+        if vis_path.suffix.lower() not in VISUAL_EXTS:
+            continue
+        parts = [p.lower() for p in vis_path.relative_to(PROJECT_DIR).parts]
+        if "spectral_libraries" in parts or "testdata" in parts:
+            continue
+        if "raw" in parts:
+            continue
+
+        rel = vis_path.relative_to(PROJECT_DIR)
+        stem = vis_path.stem
+        dataset_id = rel.with_suffix("").as_posix().replace("/", "__")
+        if dataset_id in out:
+            continue
+
+        meta = datasets_meta.get(dataset_id, {}) if isinstance(datasets_meta, dict) else {}
+        default_name = f"{project_name} - {_to_title(stem)}"
+        rec = {
+            "name": meta.get("name", default_name),
+            "project_id": PROJECT_ID,
+            "project_name": project_name,
+            "thumbnail": meta.get("thumbnail"),
+        }
+        suffix = vis_path.suffix.lower()
+        if suffix in {".tif", ".tiff"}:
+            rec["tiff"] = str(vis_path)
+        elif suffix == ".png":
+            rec["png"] = str(vis_path)
+        else:
+            rec["jpg"] = str(vis_path)
+
+        out[dataset_id] = rec
 
     return out
 
