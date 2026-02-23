@@ -3,7 +3,11 @@ from pathlib import Path
 from fastapi import HTTPException
 
 
-LIBRARIES_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "spectral_libraries"
+DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
+LIBRARIES_ROOTS = [
+    DATA_ROOT / "old_man" / "spectral_libraries",
+    DATA_ROOT / "spectral_libraries",
+]
 
 
 def _label_from_path(path: Path) -> str:
@@ -29,28 +33,32 @@ def _variant_from_stem(stem: str) -> str:
 
 def list_reference_libraries() -> list[dict]:
     libraries: list[dict] = []
-    if not LIBRARIES_ROOT.exists():
-        return libraries
+    seen_ids: set[str] = set()
 
-    # backend/app/analysis/classification/reference_registry.py
-    for hdr_path in sorted(LIBRARIES_ROOT.rglob("*.hdr")):
-        candidates = [hdr_path.with_suffix(".sli"), hdr_path.with_suffix(".img")]
-        data_path = next((p for p in candidates if p.exists()), None)
-        if data_path is None:
+    for root in LIBRARIES_ROOTS:
+        if not root.exists():
             continue
-        rel = hdr_path.relative_to(LIBRARIES_ROOT).as_posix()
-        lib_id = rel.replace("/", "__")
-        group_name = _title_case_tokens(hdr_path.parent.name)
-        variant_name = _variant_from_stem(hdr_path.stem)
+        for hdr_path in sorted(root.rglob("*.hdr")):
+            candidates = [hdr_path.with_suffix(".sli"), hdr_path.with_suffix(".img")]
+            data_path = next((p for p in candidates if p.exists()), None)
+            if data_path is None:
+                continue
+            rel = hdr_path.relative_to(root).as_posix()
+            lib_id = rel.replace("/", "__")
+            if lib_id in seen_ids:
+                continue
+            seen_ids.add(lib_id)
+            group_name = _title_case_tokens(hdr_path.parent.name)
+            variant_name = _variant_from_stem(hdr_path.stem)
 
-        libraries.append({
-            "id": lib_id,
-            "label": f"{group_name} - {variant_name}",
-            "group": group_name,
-            "variant": variant_name,
-            "hdr_path": str(hdr_path),
-            "data_path": str(data_path),
-        })
+            libraries.append({
+                "id": lib_id,
+                "label": f"{group_name} - {variant_name}",
+                "group": group_name,
+                "variant": variant_name,
+                "hdr_path": str(hdr_path),
+                "data_path": str(data_path),
+            })
 
     return libraries
 

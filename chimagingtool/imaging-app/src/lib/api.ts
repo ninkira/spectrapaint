@@ -1,7 +1,7 @@
 export type DatasetMeta = {
   id: string
   name: string
-  type: 'hsi' | 'tiff' | 'png'
+  type: 'hsi' | 'tiff' | 'png' | 'jpg'
   path: string
   width: number
   height: number
@@ -19,4 +19,5 @@ export async function listDatasets(): Promise<DatasetMeta[]> {
 export const rgbUrl = (id: string, r: number, g: number, b: number, stretch='percent_2') =>
   `${base}/datasets/${id}/rgb?r=${r}&g=${g}&b=${b}&stretch=${stretch}`;
 
-export const visualUrl = (id: string) => `${base}/datasets/${id}/visual`;
+export const visualUrl = (id: string, maxW?: number) =>
+  `${base}/datasets/${id}/visual${maxW ? `?max_w=${Math.round(maxW)}` : ''}`;

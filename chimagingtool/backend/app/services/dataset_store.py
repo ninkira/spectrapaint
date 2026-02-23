@@ -11,7 +11,7 @@ PROJECT_ID = "old_man"
 PROJECT_DIR = DATA_DIR / PROJECT_ID
 PROJECT_REGISTRY_FILE = PROJECT_DIR / "registry.json"
 HSI_ROOT = PROJECT_DIR / "hsi"
-VISUAL_EXTS = {".tif", ".tiff", ".png"}
+VISUAL_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 
 
 def _to_title(text: str) -> str:
@@ -94,10 +94,13 @@ def _build_auto_registry() -> dict[str, Any]:
             "project_name": project_name,
             "thumbnail": meta.get("thumbnail"),
         }
-        if vis_path.suffix.lower() in {".tif", ".tiff"}:
+        suffix = vis_path.suffix.lower()
+        if suffix in {".tif", ".tiff"}:
             rec["tiff"] = str(vis_path)
-        else:
+        elif suffix == ".png":
             rec["png"] = str(vis_path)
+        else:
+            rec["jpg"] = str(vis_path)
 
         out[dataset_id] = rec
 

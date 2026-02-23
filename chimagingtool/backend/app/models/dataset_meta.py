@@ -6,7 +6,7 @@ from typing import Literal
 class DatasetMeta(BaseModel):
     id: str
     name: str
-    type: Literal["hsi", "tiff", "png"]
+    type: Literal["hsi", "tiff", "png", "jpg"]
     path: str
     width: int
     height: int
