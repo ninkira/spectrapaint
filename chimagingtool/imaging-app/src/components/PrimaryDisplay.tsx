@@ -729,22 +729,26 @@ export default function PrimaryDisplay({
               if (!p) return null
 
               return (
-                <circle
+                <g
                   key={a.id}
-                  cx={p.x}
-                  cy={p.y}
-                  r={5}
-                  fill={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
-                  stroke={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
-                  strokeWidth={strokeWidth}
                   onClick={() => {
                     setSelectedRoiId(null)
                     setSelectedProbePointId(a.id)
                     setSelectedProbeGroupId(a.groupId ?? null)
                   }}
                   style={{ cursor: 'pointer' }}
-
-                />
+                >
+                  {/* Larger hit area so existing points are easy to click */}
+                  <circle cx={p.x} cy={p.y} r={10} fill="rgba(0,0,0,0.001)" stroke="none" />
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={5}
+                    fill={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
+                    stroke={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
+                    strokeWidth={strokeWidth}
+                  />
+                </g>
               )
             }
 
