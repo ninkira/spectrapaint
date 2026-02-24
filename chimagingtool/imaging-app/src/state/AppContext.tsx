@@ -7,7 +7,8 @@ import type { Spectrum } from '../components/hsi_tools/SpectrumPlot'
 import type { Layer } from './types'
 
 
-type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' | 'polygon'
+type SelectionMode = 'multiple' | 'rect' | 'ellipse' | 'line' | 'polygon'
+type ViewState = { zoom: number; panX: number; panY: number }
 
 
 type Ctx = {
@@ -26,8 +27,10 @@ type Ctx = {
   rgbImgUrl?: string;
 
   // Selection
-  selectionMode: SelectionMode;
-  setSelectionMode: (m: SelectionMode) => void;
+  selectionMode: SelectionMode | null;
+  setSelectionMode: (m: SelectionMode | null) => void;
+  navigationMode: boolean
+  setNavigationMode: (v: boolean) => void
   showSignalProcessing: boolean
   setShowSignalProcessing: (v: boolean) => void
 
@@ -57,6 +60,12 @@ type Ctx = {
   selectedProbePointId: string | null
   setSelectedProbePointId: (id: string | null) => void
 
+  // Viewport (for pan/zoom)
+  view: ViewState
+  setView: (next: ViewState) => void
+  zoomIn: () => void
+  zoomOut: () => void
+  resetView: () => void
 
 };
 
@@ -107,12 +116,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const toggleLayer = (id: string) => setDatasetId(id)
 
   // new for selection one or multiple pixels in the image
-  const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
+  const [selectionMode, setSelectionMode] = useState<SelectionMode | null>(null)
+  const [navigationMode, setNavigationMode] = useState(false)
   const [showSignalProcessing, setShowSignalProcessing] = useState(false)
 
   const [selectedProbeGroupId, setSelectedProbeGroupId] = useState<string | null>(null)
   const [probeSpectraByGroupId, setProbeSpectraByGroupId] = useState<Record<string, Spectrum[]>>({})
   const [selectedProbePointId, setSelectedProbePointId] = useState<string | null>(null)
+  const [view, setViewState] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
+
+  const setView = useCallback((next: ViewState) => {
+    const zoom = Math.min(8, Math.max(0.25, next.zoom))
+    setViewState({ zoom, panX: next.panX, panY: next.panY })
+  }, [])
+
+  const zoomIn = useCallback(() => {
+    setViewState((prev) => ({ ...prev, zoom: Math.min(8, +(prev.zoom * 1.2).toFixed(4)) }))
+  }, [])
+
+  const zoomOut = useCallback(() => {
+    setViewState((prev) => ({ ...prev, zoom: Math.max(0.25, +(prev.zoom / 1.2).toFixed(4)) }))
+  }, [])
+
+  const resetView = useCallback(() => {
+    setViewState({ zoom: 1, panX: 0, panY: 0 })
+  }, [])
 
   const setProbeSpectraForGroup = (id: string, spectra: Spectrum[]) => {
     setProbeSpectraByGroupId(prev => ({ ...prev, [id]: spectra }))
@@ -186,6 +214,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Selection
     selectionMode,
     setSelectionMode,
+    navigationMode,
+    setNavigationMode,
     showSignalProcessing,
     setShowSignalProcessing,
 
@@ -213,6 +243,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setProbeSpectraForGroup,
     selectedProbePointId,
     setSelectedProbePointId,
+    view,
+    setView,
+    zoomIn,
+    zoomOut,
+    resetView,
 
   }), [
     fileLayers,
@@ -221,6 +256,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     rgbBands,
     rgbImgUrl,
     selectionMode,
+    navigationMode,
     showSignalProcessing,
     selectedSpectra,
     annotations,
@@ -236,6 +272,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setProbeSpectraForGroup,
     selectedProbePointId,
     setSelectedProbePointId,
+    view,
+    setView,
+    zoomIn,
+    zoomOut,
+    resetView,
   ])
 
   return (

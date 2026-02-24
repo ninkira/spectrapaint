@@ -7,7 +7,7 @@ type ShapeMode = 'rect' | 'ellipse' | 'line'
 const ICON_COLOR = '#e8edf5' // same as --ink
 
 const ShapeToolMenu: React.FC = () => {
-  const { setSelectionMode } = useApp()
+  const { selectionMode, setSelectionMode, setNavigationMode } = useApp()
 
   // preview icon state — default rectangle
   const [currentShape, setCurrentShape] = useState<ShapeMode>('rect')
@@ -15,7 +15,8 @@ const ShapeToolMenu: React.FC = () => {
 
   const handleSelect = (mode: ShapeMode) => {
     setCurrentShape(mode)    // change preview icon
-    setSelectionMode(mode)   // tell the app which selection tool to use
+    setNavigationMode(false)
+    setSelectionMode(selectionMode === mode ? null : mode)
     setOpen(false)
   }
 

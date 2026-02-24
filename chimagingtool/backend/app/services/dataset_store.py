@@ -57,7 +57,7 @@ def _build_auto_registry() -> dict[str, Any]:
         rel = hdr_path.relative_to(PROJECT_DIR)
         stem = hdr_path.stem
         dataset_id = rel.with_suffix("").as_posix().replace("/", "__")
-        meta = datasets_meta.get(dataset_id, {}) if isinstance(datasets_meta, dict) else {}
+        meta = _find_dataset_meta(datasets_meta, dataset_id, rel.with_suffix("").as_posix(), stem)
         default_name = f"{project_name} - {_to_title(stem)}"
 
         out[dataset_id] = {
@@ -86,7 +86,7 @@ def _build_auto_registry() -> dict[str, Any]:
         if dataset_id in out:
             continue
 
-        meta = datasets_meta.get(dataset_id, {}) if isinstance(datasets_meta, dict) else {}
+        meta = _find_dataset_meta(datasets_meta, dataset_id, rel.with_suffix("").as_posix(), stem)
         default_name = f"{project_name} - {_to_title(stem)}"
         rec = {
             "name": meta.get("name", default_name),
@@ -105,6 +105,30 @@ def _build_auto_registry() -> dict[str, Any]:
         out[dataset_id] = rec
 
     return out
+
+
+def _find_dataset_meta(
+    datasets_meta: dict[str, Any], dataset_id: str, rel_no_suffix: str, stem: str
+) -> dict[str, Any]:
+    if not isinstance(datasets_meta, dict):
+        return {}
+
+    # Supported keys in registry.json:
+    # - exact generated ID: "hsi__raw__001"
+    # - relative path w/o suffix: "hsi/raw/001" or "hsi__raw__001"
+    # - simple stem for legacy entries: "001"
+    candidates = [
+        dataset_id,
+        rel_no_suffix,
+        rel_no_suffix.replace("/", "__"),
+        stem,
+    ]
+
+    for key in candidates:
+        meta = datasets_meta.get(key)
+        if isinstance(meta, dict):
+            return meta
+    return {}
 
 
 def registry() -> dict[str, Any]:

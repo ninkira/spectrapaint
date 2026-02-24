@@ -9,8 +9,8 @@ import {
   RotateCcw,
   ZoomIn,
   ZoomOut,
+  RefreshCw,
   SquareDashed,
-  MapPin,
   MapPinPlus,
   WaypointsIcon,
 } from "lucide-react";
@@ -24,12 +24,24 @@ export default function Toolbar() {
   const {
     selectionMode,
     setSelectionMode,
+    navigationMode,
+    setNavigationMode,
     showSignalProcessing,
     setShowSignalProcessing,
+    zoomIn,
+    zoomOut,
+    resetView,
   } = useApp();
 
   const toggleSignalProcessing = () => {
     setShowSignalProcessing(!showSignalProcessing)
+  }
+
+  const toggleAnnotationMode = (
+    mode: 'multiple' | 'rect' | 'ellipse' | 'line' | 'polygon',
+  ) => {
+    setNavigationMode(false)
+    setSelectionMode(selectionMode === mode ? null : mode)
   }
 
   return (
@@ -42,11 +54,21 @@ export default function Toolbar() {
 
         <span className="divider" />
 
-        <button aria-label="Navigate"><Navigation size={20} /></button>
+        <button
+          aria-label="Navigate"
+          className={navigationMode ? "active" : ""}
+          onClick={() => {
+            const next = !navigationMode
+            setNavigationMode(next)
+            if (next) setSelectionMode(null)
+          }}
+        >
+          <Navigation size={20} />
+        </button>
         <button aria-label="Rotate Left"><RotateCcw size={20} /></button>
 
-        <button aria-label="Zoom In"><ZoomIn size={20} /></button>
-        <button aria-label="Zoom Out"><ZoomOut size={20} /></button>
+        <button aria-label="Zoom In" onClick={zoomIn}><ZoomIn size={20} /></button>
+        <button aria-label="Zoom Out" onClick={zoomOut}><ZoomOut size={20} /></button>
 
         <span className="divider" />
 
@@ -57,7 +79,7 @@ export default function Toolbar() {
         <button
           aria-label="SelectMultiplePoints"
           className={selectionMode === "multiple" ? "active" : ""}
-          onClick={() => setSelectionMode("multiple")}
+          onClick={() => toggleAnnotationMode("multiple")}
         >
           <MapPinPlus size={20} />
         </button>
@@ -80,6 +102,7 @@ export default function Toolbar() {
         <span className="divider" />
 
         <button aria-label="Chat"><MessageCircle size={20} /></button>
+        <button aria-label="Reset View" onClick={resetView}><RefreshCw size={20} /></button>
         <button aria-label="Save"><Save size={20} /></button>
       </div>
     </header>
