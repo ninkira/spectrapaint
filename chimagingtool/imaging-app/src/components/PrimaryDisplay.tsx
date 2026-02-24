@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from 'r
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
-import type { RectAnn, EllipseAnn, PolygonAnn } from '../models/annotations'
+import type { RectAnn, EllipseAnn, PolygonAnn, LineAnn } from '../models/annotations'
 
 interface PrimaryDisplayProps {
   onRegionSpectra?: (specs: Spectrum[]) => void // optional
@@ -174,6 +174,84 @@ export default function PrimaryDisplay({
 
   }
 
+  const fetchSpectraOnLine = async (start: ImagePoint, end: ImagePoint) => {
+    if (!dataset) return null
+
+    const params = new URLSearchParams({
+      x0: start.x.toString(),
+      y0: start.y.toString(),
+      x1: end.x.toString(),
+      y1: end.y.toString(),
+    })
+
+    const res = await fetch(`/api/datasets/${dataset.id}/spectra-line?${params.toString()}`)
+    if (!res.ok) {
+      console.error('Failed to fetch line spectra', await res.text())
+      return null
+    }
+    return (await res.json()) as { spectra: Spectrum[] }
+  }
+
+  const finalizeLineFromDraft = (verts: DisplayPoint[]) => {
+    if (!dataset) return
+    if (verts.length < 2) return
+
+    const imgPoints: ImagePoint[] = []
+    for (const v of verts) {
+      const iv = toImageCoords(v)
+      if (!iv) return
+      imgPoints.push(iv)
+    }
+
+    const ann: LineAnn = {
+      id: crypto.randomUUID(),
+      datasetId: dataset.id,
+      kind: 'roi',
+      type: 'line',
+      createdAt: new Date().toISOString(),
+      geometry: { points: imgPoints },
+      label: 'ROI',
+    }
+
+    addAnnotation(ann)
+    setSelectedProbePointId(null)
+    setSelectedRoiId(ann.id)
+
+    if (!isHsiDataset) {
+      setDraftVertices(null)
+      setDraftHover(null)
+      return
+    }
+
+    void (async () => {
+      const allSpectra: Spectrum[] = []
+      for (let i = 0; i < imgPoints.length - 1; i += 1) {
+        const segment = await fetchSpectraOnLine(imgPoints[i], imgPoints[i + 1])
+        if (!segment?.spectra) continue
+
+        const seg = segment.spectra
+        if (allSpectra.length > 0 && seg.length > 0) {
+          // Avoid duplicating shared vertex spectra between adjacent segments.
+          allSpectra.push(...seg.slice(1))
+        } else {
+          allSpectra.push(...seg)
+        }
+      }
+
+      if (allSpectra.length === 0) return
+
+      onRegionSpectra?.(allSpectra)
+      for (const s of allSpectra) {
+        if (s) addSpectrum(s)
+      }
+      setRoiSpectraForId(ann.id, allSpectra)
+      setSelectedRoiId(ann.id)
+    })()
+
+    setDraftVertices(null)
+    setDraftHover(null)
+  }
+
 
 
 
@@ -312,6 +390,11 @@ export default function PrimaryDisplay({
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && selectionMode === 'line' && draftVertices && draftVertices.length >= 2) {
+        e.preventDefault()
+        finalizeLineFromDraft(draftVertices)
+        return
+      }
       if (e.key !== 'Escape') return
       if (!hasActiveDraft) return
       e.preventDefault()
@@ -325,7 +408,7 @@ export default function PrimaryDisplay({
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [hasActiveDraft])
+  }, [hasActiveDraft, selectionMode, draftVertices])
 
   // ---- mouse handlers on wrapper ----
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
@@ -365,13 +448,18 @@ export default function PrimaryDisplay({
     }
 
     else if (isPolygonLikeMode) {
+      if (selectionMode === 'line' && draftVertices && draftVertices.length >= 2 && e.detail >= 2) {
+        finalizeLineFromDraft(draftVertices)
+        return
+      }
+
       if (!draftVertices) {
         setDraftVertices([contentPt])
         setDraftHover(contentPt)
         return
       }
 
-      if (isCloseToStart(contentPt, draftVertices)) {
+      if (selectionMode === 'polygon' && isCloseToStart(contentPt, draftVertices)) {
         finalizePolygonFromDraft(draftVertices)
         return
       }
@@ -724,6 +812,30 @@ export default function PrimaryDisplay({
               )
             }
 
+            if (a.type === 'line') {
+              const pts = a.geometry.points
+                .map(toDisplayCoords)
+                .filter((p): p is DisplayPoint => !!p)
+                .map((p) => `${p.x},${p.y}`)
+                .join(' ')
+              if (!pts) return null
+
+              return (
+                <polyline
+                  key={a.id}
+                  points={pts}
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
+                />
+              )
+            }
+
             if (a.kind === 'probe' && a.type === 'point') {
               const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
               if (!p) return null
@@ -845,15 +957,17 @@ export default function PrimaryDisplay({
               />
             )}
 
-            {/* start vertex handle (click to close) */}
-            <circle
-              cx={draftVertices[0].x}
-              cy={draftVertices[0].y}
-              r={6}
-              fill="white"
-              stroke="red"
-              strokeWidth={2}
-            />
+            {/* start vertex handle (polygon close hint only) */}
+            {selectionMode === 'polygon' && (
+              <circle
+                cx={draftVertices[0].x}
+                cy={draftVertices[0].y}
+                r={6}
+                fill="white"
+                stroke="red"
+                strokeWidth={2}
+              />
+            )}
           </>
         )}
       </svg>

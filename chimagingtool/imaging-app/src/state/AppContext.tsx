@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { listDatasets, rgbUrl, visualUrl } from '../lib/api';
+import { getDatasetAnnotations, listDatasets, rgbUrl, saveDatasetAnnotations, visualUrl } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import { useCallback } from 'react'
@@ -44,6 +44,8 @@ type Ctx = {
   addAnnotation: (a: Annotation) => void
   updateAnnotation: (id: string, patch: Partial<Annotation>) => void
   removeAnnotation: (id: string) => void
+  setAnnotationsForDataset: (datasetId: string, items: Annotation[]) => void
+  saveAnnotationsForDataset: (datasetId: string, items?: Annotation[]) => Promise<void>
   clearProbePointsForDataset: (datasetId: string) => void
 
   // selected ROI
@@ -104,6 +106,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const updateAnnotation = useCallback((id: string, patch: Partial<Annotation>) => {
     setAnnotations(prev => prev.map(a => (a.id === id ? { ...a, ...patch, updatedAt: new Date().toISOString() } : a)))
   }, [])
+
+  const setAnnotationsForDataset = useCallback((targetDatasetId: string, items: Annotation[]) => {
+    const sanitized = items.map((a) => ({ ...a, datasetId: targetDatasetId }))
+    setAnnotations((prev) => [
+      ...prev.filter((a) => a.datasetId !== targetDatasetId),
+      ...sanitized,
+    ])
+  }, [])
+
+  const saveAnnotationsForDataset = useCallback(async (targetDatasetId: string, items?: Annotation[]) => {
+    const datasetItems = (items ?? annotations.filter((a) => a.datasetId === targetDatasetId))
+      .map((a) => ({ ...a, datasetId: targetDatasetId }))
+    await saveDatasetAnnotations(targetDatasetId, datasetItems)
+  }, [annotations])
 
   const clearProbePointsForDataset = useCallback((datasetId: string) => {
     setAnnotations(prev =>
@@ -180,6 +196,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [datasetId, datasets]);
 
   useEffect(() => {
+    if (!datasetId) return
+    let cancelled = false
+
+    void getDatasetAnnotations(datasetId)
+      .then((items) => {
+        if (cancelled) return
+        setAnnotationsForDataset(datasetId, items)
+      })
+      .catch((err) => {
+        console.error('Failed to load persisted annotations', err)
+      })
+
+    return () => { cancelled = true }
+  }, [datasetId, setAnnotationsForDataset])
+
+  useEffect(() => {
     if (!datasetId || !dataset) return
     if (dataset.type === 'hsi') {
       const u = rgbUrl(datasetId, rgbBands.r, rgbBands.g, rgbBands.b)
@@ -229,6 +261,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addAnnotation,
     updateAnnotation,
     removeAnnotation,
+    setAnnotationsForDataset,
+    saveAnnotationsForDataset,
     clearProbePointsForDataset,
 
     // selected ROI
@@ -261,6 +295,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     selectedSpectra,
     annotations,
     updateAnnotation,
+    setAnnotationsForDataset,
+    saveAnnotationsForDataset,
     clearProbePointsForDataset,
     selectedRoiId,
     roiSpectraById,

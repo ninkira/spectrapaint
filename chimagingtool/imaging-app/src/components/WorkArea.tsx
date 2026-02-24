@@ -19,7 +19,10 @@ export default function WorkArea() {
     selectedProbeGroupId,
     probeSpectraByGroupId,
     annotations,
-    updateAnnotation,
+    setAnnotationsForDataset,
+    saveAnnotationsForDataset,
+    setSelectedRoiId,
+    setSelectedProbePointId,
   } = useApp()
 
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
@@ -56,15 +59,48 @@ export default function WorkArea() {
     setAnnotationDescription(activeAnnotation?.description ?? '')
   }, [activeAnnotationId, activeAnnotation?.title, activeAnnotation?.label, activeAnnotation?.description])
 
-  const saveAnnotationMeta = () => {
-    if (!activeAnnotation) return
-    const cleanTitle = annotationTitle.trim()
-    const cleanDescription = annotationDescription.trim()
-    updateAnnotation(activeAnnotation.id, {
-      title: cleanTitle || undefined,
-      label: cleanTitle || activeAnnotation.label,
-      description: cleanDescription || undefined,
-    })
+  const saveAnnotationMeta = async () => {
+    if (!activeAnnotation || !dataset) return
+    try {
+      const cleanTitle = annotationTitle.trim()
+      const cleanDescription = annotationDescription.trim()
+      const nextForDataset = annotations
+        .filter((a) => a.datasetId === dataset.id)
+        .map((a) => (
+          a.id === activeAnnotation.id
+            ? {
+              ...a,
+              title: cleanTitle || undefined,
+              label: cleanTitle || a.label,
+              description: cleanDescription || undefined,
+              updatedAt: new Date().toISOString(),
+            }
+            : a
+        ))
+
+      setAnnotationsForDataset(dataset.id, nextForDataset)
+      await saveAnnotationsForDataset(dataset.id, nextForDataset)
+    } catch (err) {
+      console.error('Failed to save annotation', err)
+    }
+  }
+
+  const deleteActiveAnnotation = async () => {
+    if (!activeAnnotation || !dataset) return
+    try {
+      const nextForDataset = annotations
+        .filter((a) => a.datasetId === dataset.id && a.id !== activeAnnotation.id)
+
+      setAnnotationsForDataset(dataset.id, nextForDataset)
+      if (activeAnnotation.kind === 'probe') {
+        setSelectedProbePointId(null)
+      } else {
+        setSelectedRoiId(null)
+      }
+      await saveAnnotationsForDataset(dataset.id, nextForDataset)
+    } catch (err) {
+      console.error('Failed to delete annotation', err)
+    }
   }
 
 
@@ -141,8 +177,11 @@ export default function WorkArea() {
                 style={{ padding: '0.5rem', borderRadius: '6px', border: '1px solid #3a465c' }}
               />
             </label>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button className="btn btn-primary" type="button" onClick={saveAnnotationMeta}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button className="btn btn-secondary" type="button" onClick={() => void deleteActiveAnnotation()}>
+                Delete Annotation
+              </button>
+              <button className="btn btn-primary" type="button" onClick={() => void saveAnnotationMeta()}>
                 Save Annotation
               </button>
             </div>

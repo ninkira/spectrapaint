@@ -38,7 +38,6 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
 }) => {
   const [showSignals, setShowSignals] = useState(false)
   const [showStdBand, setShowStdBand] = useState(true)
-  const [showMatches, setShowMatches] = useState(true)
 
   const nonNull = useMemo(
     () => spectra.filter((s): s is Exclude<Spectrum, null> => !!s),
@@ -111,19 +110,17 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
     line: { color: '#111', width: 2 },
   })
 
-  if (showMatches) {
-    for (const match of comparisonSpectra) {
-      const xAxis = match.wavelengths_nm && match.wavelengths_nm.length ? match.wavelengths_nm : wl
-      if (xAxis.length !== match.values.length) continue
-      data.push({
-        x: xAxis,
-        y: match.values,
-        type: 'scatter',
-        mode: 'lines',
-        name: match.name,
-        line: { width: 2 },
-      })
-    }
+  for (const match of comparisonSpectra) {
+    const xAxis = match.wavelengths_nm && match.wavelengths_nm.length ? match.wavelengths_nm : wl
+    if (xAxis.length !== match.values.length) continue
+    data.push({
+      x: xAxis,
+      y: match.values,
+      type: 'scatter',
+      mode: 'lines',
+      name: match.name,
+      line: { width: 2 },
+    })
   }
 
   const layout: Partial<Layout> = {
@@ -143,12 +140,9 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
         <button onClick={() => setShowStdBand((v) => !v)}>
           {showStdBand ? 'Hide +/-1sigma' : 'Show +/-1sigma'}
         </button>
-        <button onClick={() => setShowMatches((v) => !v)}>
-          {showMatches ? 'Hide matches' : 'Show matches'}
-        </button>
       </div>
 
-      <Plot data={data} layout={layout} style={{ width: '100%', height: 400 }} useResizeHandler />
+      <Plot data={data} layout={layout} style={{ width: '100%', height: 280 }} useResizeHandler />
     </div>
   )
 }
