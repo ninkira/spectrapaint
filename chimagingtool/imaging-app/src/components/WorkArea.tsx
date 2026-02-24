@@ -22,7 +22,6 @@ export default function WorkArea() {
     updateAnnotation,
   } = useApp()
 
-  const [spectrum, setSpectrum] = useState<Spectrum>(null)
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
   const [isOpen, setIsOpen] = useState(false)
   const [annotationTitle, setAnnotationTitle] = useState('')
@@ -34,9 +33,6 @@ export default function WorkArea() {
     selectionMode === 'multiple' || selectionMode === 'line'
 
   const selectedSpectra = useMemo(() => {
-    if (selectionMode === 'single') {
-      return spectrum ? [spectrum] : globalSelectedSpectra
-    }
     if (selectionMode === 'multiple' && selectedProbeGroupId) {
       return probeSpectraByGroupId[selectedProbeGroupId] ?? []
     }
@@ -47,7 +43,7 @@ export default function WorkArea() {
       return roiSpectraById[selectedRoiId] ?? []
     }
     return regionSpectra.length ? regionSpectra : globalSelectedSpectra
-  }, [selectionMode, spectrum, globalSelectedSpectra, selectedProbeGroupId, probeSpectraByGroupId, selectedRoiId, roiSpectraById, regionSpectra])
+  }, [selectionMode, globalSelectedSpectra, selectedProbeGroupId, probeSpectraByGroupId, selectedRoiId, roiSpectraById, regionSpectra])
 
   const activeAnnotationId = selectedRoiId ?? selectedProbePointId
   const activeAnnotation = useMemo(
@@ -76,9 +72,7 @@ export default function WorkArea() {
 
   if (showSignalProcessing) {
     const title =
-      selectionMode === 'single'
-        ? 'Single pixel spectrum'
-        : isMultiPixelMode
+      isMultiPixelMode
         ? 'Multiple spectra (clicked pixels)'
         : isRegionMode
           ? 'Region spectra (rectangle / ellipse)'
@@ -91,7 +85,6 @@ export default function WorkArea() {
     <div className="viewer-layout">
       {/* LEFT: image display */}
       <PrimaryDisplay
-        onSpectrum={setSpectrum}
         onRegionSpectra={setRegionSpectra}
       />
 

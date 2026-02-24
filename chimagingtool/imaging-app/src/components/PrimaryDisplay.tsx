@@ -1,12 +1,11 @@
 // PrimaryDisplay.tsx
-import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
 import type { RectAnn, EllipseAnn, PolygonAnn } from '../models/annotations'
 
 interface PrimaryDisplayProps {
-  onSpectrum?: (s: Spectrum) => void
   onRegionSpectra?: (specs: Spectrum[]) => void // optional
 }
 
@@ -18,31 +17,36 @@ type Polygon = { vertices: ImagePoint[] }
 
 
 export default function PrimaryDisplay({
-  onSpectrum,
   onRegionSpectra,
 }: PrimaryDisplayProps) {
   const {
     fileLayers,
-    selectionMode, // 'single' | 'multiple' | 'rect' | 'ellipse' | 'line'  | 'polygon' 
+    selectionMode, // 'multiple' | 'rect' | 'ellipse' | 'line'  | 'polygon' 
     addSpectrum,
     rgbImgUrl,
     dataset,
     annotations,
     addAnnotation,
-    clearProbePointsForDataset,
     selectedRoiId,
     setRoiSpectraForId,
     setSelectedRoiId,
     selectedProbeGroupId,
+    selectedProbePointId,
     probeSpectraByGroupId,
     setProbeSpectraForGroup,
-    setSelectedProbeGroupId
+    setSelectedProbeGroupId,
+    setSelectedProbePointId,
+    view,
+    setView,
+    navigationMode,
   } = useApp()
 
   const show = fileLayers.some((l) => l.on)
   const isHsiDataset = dataset?.type === 'hsi'
   const imgRef = useRef<HTMLImageElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
+  const [isPanning, setIsPanning] = useState(false)
   /* Circle/Retangle Selection */
   const [dragStart, setDragStart] = useState<DisplayPoint | null>(null)
   const [dragCurrent, setDragCurrent] = useState<DisplayPoint | null>(null)
@@ -76,7 +80,8 @@ export default function PrimaryDisplay({
   /** functions */
   const isCloseToStart = (pt: DisplayPoint, verts: DisplayPoint[]) => {
     if (verts.length === 0) return false
-    return dist2(pt, verts[0]) <= CLOSE_RADIUS_PX * CLOSE_RADIUS_PX
+    const closeRadius = CLOSE_RADIUS_PX / Math.max(0.0001, view.zoom)
+    return dist2(pt, verts[0]) <= closeRadius * closeRadius
   }
 
   const cancelActiveSelection = () => {
@@ -93,16 +98,19 @@ export default function PrimaryDisplay({
   const addProbePoint = (x: number, y: number) => {
     if (!dataset) return
 
+    const annotationId = crypto.randomUUID()
     addAnnotation({
-      id: crypto.randomUUID(),
+      id: annotationId,
       datasetId: dataset.id,
       kind: 'probe',
       type: 'point',
       createdAt: new Date().toISOString(),
       geometry: { x, y },
-      label: selectionMode === 'single' ? 'Probe' : 'Probe (multi)',
+      label: 'Probe (multi)',
       ...(probeGroupId ? { groupId: probeGroupId } : {}),
     })
+    setSelectedRoiId(null)
+    setSelectedProbePointId(annotationId)
   }
 
   const finalizePolygonFromDraft = (verts: DisplayPoint[]) => {
@@ -172,10 +180,18 @@ export default function PrimaryDisplay({
 
 
   const isBoxMode = selectionMode === 'rect' || selectionMode === 'ellipse'
-  const isPointMode = selectionMode === 'single' || selectionMode === 'multiple'
+  const isPointMode = selectionMode === 'multiple'
   const isPolygonLikeMode = selectionMode === 'polygon' || selectionMode === 'line'
 
 
+
+  const toContentCoords = (display: DisplayPoint): DisplayPoint => {
+    const z = Math.max(0.0001, view.zoom)
+    return {
+      x: (display.x - view.panX) / z,
+      y: (display.y - view.panY) / z,
+    }
+  }
 
   // ---- helper: wrapper coords -> image coords ----
   const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
@@ -248,9 +264,6 @@ export default function PrimaryDisplay({
     if (!imgCoords || !dataset) return
 
     if (!isHsiDataset) {
-      if (selectionMode === 'single') {
-        clearProbePointsForDataset(dataset.id)
-      }
       addProbePoint(imgCoords.x, imgCoords.y)
       return
     }
@@ -259,17 +272,10 @@ export default function PrimaryDisplay({
     const spec = await fetchSpectrumAtImagePoint(imgCoords.x, imgCoords.y)
     if (!spec) return
 
-    // update plot data (existing behavior)
-    if (selectionMode === 'single') {
-      onSpectrum?.(spec)
-    } else {
-      addSpectrum(spec)
-    }
+    // update plot data
+    addSpectrum(spec)
 
     // store probe annotation (NEW)
-    if (selectionMode === 'single') {
-      clearProbePointsForDataset(dataset.id)  // clear old probes
-    }
     addProbePoint(imgCoords.x, imgCoords.y)   // save this probe point
 
 
@@ -333,33 +339,45 @@ export default function PrimaryDisplay({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     }
+    const contentPt = toContentCoords(displayPt)
+
+    if (navigationMode) {
+      panStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        panX: view.panX,
+        panY: view.panY,
+      }
+      setIsPanning(true)
+      return
+    }
 
     if (isPointMode) {
       // normal click → pixel spectrum
-      void handlePixelClickAtDisplayPoint(displayPt)
+      void handlePixelClickAtDisplayPoint(contentPt)
       return
     }
     else if (isBoxMode) {
       // start drag for rect/ellipse
-      setDragStart(displayPt)
-      setDragCurrent(displayPt)
+      setDragStart(contentPt)
+      setDragCurrent(contentPt)
 
     }
 
     else if (isPolygonLikeMode) {
       if (!draftVertices) {
-        setDraftVertices([displayPt])
-        setDraftHover(displayPt)
+        setDraftVertices([contentPt])
+        setDraftHover(contentPt)
         return
       }
 
-      if (isCloseToStart(displayPt, draftVertices)) {
+      if (isCloseToStart(contentPt, draftVertices)) {
         finalizePolygonFromDraft(draftVertices)
         return
       }
 
-      setDraftVertices((prev) => (prev ? [...prev, displayPt] : [displayPt]))
-      setDraftHover(displayPt)
+      setDraftVertices((prev) => (prev ? [...prev, contentPt] : [contentPt]))
+      setDraftHover(contentPt)
       return
     }
 
@@ -376,15 +394,27 @@ export default function PrimaryDisplay({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     }
+    const contentPt = toContentCoords(displayPt)
+
+    if (navigationMode && panStartRef.current) {
+      const dx = e.clientX - panStartRef.current.x
+      const dy = e.clientY - panStartRef.current.y
+      setView({
+        zoom: view.zoom,
+        panX: panStartRef.current.panX + dx,
+        panY: panStartRef.current.panY + dy,
+      })
+      return
+    }
 
     // box preview
     if (isBoxMode && dragStart) {
-      setDragCurrent(displayPt)
+      setDragCurrent(contentPt)
     }
 
     // polygon preview: update hover point while drawing
     if (isPolygonLikeMode && draftVertices) {
-      setDraftHover(displayPt)
+      setDraftHover(contentPt)
     }
 
   }
@@ -393,6 +423,12 @@ export default function PrimaryDisplay({
 
 
   const handleMouseUp = async (e: MouseEvent<HTMLDivElement>) => {
+    if (navigationMode) {
+      panStartRef.current = null
+      setIsPanning(false)
+      return
+    }
+
     const wrapper = wrapperRef.current
     if (!wrapper || !dragStart || !dragCurrent) {
       setDragStart(null)
@@ -524,6 +560,36 @@ export default function PrimaryDisplay({
     setDragCurrent(null)
   }
 
+  const handleMouseLeave = () => {
+    panStartRef.current = null
+    setIsPanning(false)
+  }
+
+  const handleWheel = (e: WheelEvent<HTMLDivElement>) => {
+    if (!navigationMode) return
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+
+    e.preventDefault()
+    const rect = wrapper.getBoundingClientRect()
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+
+    const oldZoom = view.zoom
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+    const nextZoom = Math.min(8, Math.max(0.25, +(oldZoom * factor).toFixed(4)))
+    if (nextZoom === oldZoom) return
+
+    const contentX = (mouseX - view.panX) / oldZoom
+    const contentY = (mouseY - view.panY) / oldZoom
+
+    setView({
+      zoom: nextZoom,
+      panX: mouseX - contentX * nextZoom,
+      panY: mouseY - contentY * nextZoom,
+    })
+  }
+
   // ---- overlay while dragging OR last region ----
   let selectionOverlay: JSX.Element | null = null
 
@@ -585,109 +651,139 @@ export default function PrimaryDisplay({
         top: 0,
         width: '100%',
         height: '100%',
-        pointerEvents: 'auto',
+        pointerEvents: navigationMode ? 'none' : 'auto',
       }}
     >
-      {annotations
-        .filter(a => dataset && a.datasetId === dataset.id)
-        .map(a => {
-          if (a.type === 'rect') {
-            const p0 = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
-            const p1 = toDisplayCoords({ x: a.geometry.x + a.geometry.w, y: a.geometry.y + a.geometry.h })
-            if (!p0 || !p1) return null
+      {(() => {
+        const SELECTED_STROKE = '#D00000'
+        const INACTIVE_STROKE = '#E3B505'
+        const SELECTED_FILL = 'rgba(208,0,0,0.12)'
+        const INACTIVE_FILL = 'rgba(227,181,5,0.12)'
+        const selectedId = selectedRoiId ?? selectedProbePointId
 
-            const left = Math.min(p0.x, p1.x)
-            const top = Math.min(p0.y, p1.y)
-            const width = Math.abs(p1.x - p0.x)
-            const height = Math.abs(p1.y - p0.y)
+        return annotations
+          .filter(a => dataset && a.datasetId === dataset.id)
+          .map(a => {
+            const isSelected = a.id === selectedId
+            const stroke = isSelected ? SELECTED_STROKE : INACTIVE_STROKE
+            const strokeWidth = isSelected ? 3 : 2
+            const fill = isSelected ? SELECTED_FILL : INACTIVE_FILL
 
-            return (
-              <rect
-                key={a.id}
-                x={left}
-                y={top}
-                width={width}
-                height={height}
-                fill="rgba(255,0,0,0.12)"
-                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedRoiId ? 3 : 2}
-                onClick={() => setSelectedRoiId(a.id)}
-                style={{ cursor: 'pointer' }}
-              />
-            )
-          }
+            if (a.type === 'rect') {
+              const p0 = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
+              const p1 = toDisplayCoords({ x: a.geometry.x + a.geometry.w, y: a.geometry.y + a.geometry.h })
+              if (!p0 || !p1) return null
 
-          if (a.type === 'polygon') {
-            const pts = a.geometry.vertices
-              .map(toDisplayCoords)
-              .filter((p): p is DisplayPoint => !!p)
-              .map((p) => `${p.x},${p.y}`)
-              .join(' ')
+              const left = Math.min(p0.x, p1.x)
+              const top = Math.min(p0.y, p1.y)
+              const width = Math.abs(p1.x - p0.x)
+              const height = Math.abs(p1.y - p0.y)
 
-            if (!pts) return null
+              return (
+                <rect
+                  key={a.id}
+                  x={left}
+                  y={top}
+                  width={width}
+                  height={height}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
+                />
+              )
+            }
 
-            return (
-              <polygon
-                key={a.id}
-                points={pts}
-                fill="rgba(255,0,0,0.12)"
-                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedRoiId ? 3 : 2}
-                onClick={() => setSelectedRoiId(a.id)}
-                style={{ cursor: 'pointer' }}
+            if (a.type === 'polygon') {
+              const pts = a.geometry.vertices
+                .map(toDisplayCoords)
+                .filter((p): p is DisplayPoint => !!p)
+                .map((p) => `${p.x},${p.y}`)
+                .join(' ')
 
-              />
-            )
-          }
+              if (!pts) return null
 
-          if (a.kind === 'probe' && a.type === 'point') {
-            const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
-            if (!p) return null
+              return (
+                <polygon
+                  key={a.id}
+                  points={pts}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
 
-            return (
-              <circle
-                key={a.id}
-                cx={p.x}
-                cy={p.y}
-                r={5}
-                fill="white"
-                stroke={a.groupId === selectedProbeGroupId ? 'lime' : 'red'}
-                strokeWidth={a.groupId === selectedProbeGroupId ? 3 : 2}
-                onClick={() => setSelectedProbeGroupId(a.groupId ?? null)}
-                style={{ cursor: 'pointer' }}
+                />
+              )
+            }
 
-              />
-            )
-          }
+            if (a.kind === 'probe' && a.type === 'point') {
+              const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
+              if (!p) return null
+
+              return (
+                <g
+                  key={a.id}
+                  onClick={() => {
+                    setSelectedRoiId(null)
+                    setSelectedProbePointId(a.id)
+                    setSelectedProbeGroupId(a.groupId ?? null)
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
+                  {/* Larger hit area so existing points are easy to click */}
+                  <circle cx={p.x} cy={p.y} r={10} fill="rgba(0,0,0,0.001)" stroke="none" />
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={5}
+                    fill={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
+                    stroke={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
+                    strokeWidth={strokeWidth}
+                  />
+                </g>
+              )
+            }
 
 
-          if (a.type === 'ellipse') {
-            const c = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy })
-            const rxPt = toDisplayCoords({ x: a.geometry.cx + a.geometry.rx, y: a.geometry.cy })
-            const ryPt = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy + a.geometry.ry })
-            if (!c || !rxPt || !ryPt) return null
+            if (a.type === 'ellipse') {
+              const c = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy })
+              const rxPt = toDisplayCoords({ x: a.geometry.cx + a.geometry.rx, y: a.geometry.cy })
+              const ryPt = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy + a.geometry.ry })
+              if (!c || !rxPt || !ryPt) return null
 
-            const rx = Math.abs(rxPt.x - c.x)
-            const ry = Math.abs(ryPt.y - c.y)
+              const rx = Math.abs(rxPt.x - c.x)
+              const ry = Math.abs(ryPt.y - c.y)
 
-            return (
-              <ellipse
-                key={a.id}
-                cx={c.x}
-                cy={c.y}
-                rx={rx}
-                ry={ry}
-                fill="rgba(255,0,0,0.10)"
-                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedRoiId ? 3 : 2}
-                onClick={() => setSelectedRoiId(a.id)}
-                style={{ cursor: 'pointer' }}
-              />
-            )
-          }
+              return (
+                <ellipse
+                  key={a.id}
+                  cx={c.x}
+                  cy={c.y}
+                  rx={rx}
+                  ry={ry}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
+                />
+              )
+            }
 
-          return null
-        })}
+            return null
+          })
+      })()}
     </svg>
   )
 
@@ -765,6 +861,10 @@ export default function PrimaryDisplay({
   }
 
 
+  const displayCursor = navigationMode
+    ? (isPanning ? 'grabbing' : 'grab')
+    : (isHsiDataset && (isBoxMode || isPolygonLikeMode) ? 'crosshair' : 'pointer')
+
   return (
     <section className="primary-display" aria-label="Primary Display">
       {show && rgbImgUrl ? (
@@ -780,24 +880,36 @@ export default function PrimaryDisplay({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
+          onWheel={handleWheel}
         >
-          <img
-            ref={imgRef}
-            src={rgbImgUrl}
-            alt={`Hyperspectral Image${dataset ? ` ${dataset.name}` : ''
-              }`}
+          <div
             style={{
+              position: 'relative',
               width: '100%',
-              height: 'auto',
-              display: 'block',
-              cursor: isHsiDataset && (isBoxMode || isPolygonLikeMode) ? 'crosshair' : 'pointer',
+              transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`,
+              transformOrigin: '0 0',
+              willChange: 'transform',
             }}
-            draggable={false}
-            onDragStart={(e) => e.preventDefault()}
-          />
-          {savedOverlay}
-          {selectionOverlay}
-          {polygonOverlay}
+          >
+            <img
+              ref={imgRef}
+              src={rgbImgUrl}
+              alt={`Hyperspectral Image${dataset ? ` ${dataset.name}` : ''
+                }`}
+              style={{
+                width: '100%',
+                height: 'auto',
+                display: 'block',
+                cursor: displayCursor,
+              }}
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
+            />
+            {savedOverlay}
+            {selectionOverlay}
+            {polygonOverlay}
+          </div>
 
 
 
