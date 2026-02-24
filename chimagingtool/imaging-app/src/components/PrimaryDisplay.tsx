@@ -31,6 +31,7 @@ export default function PrimaryDisplay({
     setRoiSpectraForId,
     setSelectedRoiId,
     selectedProbeGroupId,
+    selectedProbePointId,
     probeSpectraByGroupId,
     setProbeSpectraForGroup,
     setSelectedProbeGroupId,
@@ -653,110 +654,132 @@ export default function PrimaryDisplay({
         pointerEvents: navigationMode ? 'none' : 'auto',
       }}
     >
-      {annotations
-        .filter(a => dataset && a.datasetId === dataset.id)
-        .map(a => {
-          if (a.type === 'rect') {
-            const p0 = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
-            const p1 = toDisplayCoords({ x: a.geometry.x + a.geometry.w, y: a.geometry.y + a.geometry.h })
-            if (!p0 || !p1) return null
+      {(() => {
+        const SELECTED_STROKE = '#D00000'
+        const INACTIVE_STROKE = '#E3B505'
+        const SELECTED_FILL = 'rgba(208,0,0,0.12)'
+        const INACTIVE_FILL = 'rgba(227,181,5,0.12)'
+        const selectedId = selectedRoiId ?? selectedProbePointId
 
-            const left = Math.min(p0.x, p1.x)
-            const top = Math.min(p0.y, p1.y)
-            const width = Math.abs(p1.x - p0.x)
-            const height = Math.abs(p1.y - p0.y)
+        return annotations
+          .filter(a => dataset && a.datasetId === dataset.id)
+          .map(a => {
+            const isSelected = a.id === selectedId
+            const stroke = isSelected ? SELECTED_STROKE : INACTIVE_STROKE
+            const strokeWidth = isSelected ? 3 : 2
+            const fill = isSelected ? SELECTED_FILL : INACTIVE_FILL
 
-            return (
-              <rect
-                key={a.id}
-                x={left}
-                y={top}
-                width={width}
-                height={height}
-                fill="rgba(255,0,0,0.12)"
-                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedRoiId ? 3 : 2}
-                onClick={() => setSelectedRoiId(a.id)}
-                style={{ cursor: 'pointer' }}
-              />
-            )
-          }
+            if (a.type === 'rect') {
+              const p0 = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
+              const p1 = toDisplayCoords({ x: a.geometry.x + a.geometry.w, y: a.geometry.y + a.geometry.h })
+              if (!p0 || !p1) return null
 
-          if (a.type === 'polygon') {
-            const pts = a.geometry.vertices
-              .map(toDisplayCoords)
-              .filter((p): p is DisplayPoint => !!p)
-              .map((p) => `${p.x},${p.y}`)
-              .join(' ')
+              const left = Math.min(p0.x, p1.x)
+              const top = Math.min(p0.y, p1.y)
+              const width = Math.abs(p1.x - p0.x)
+              const height = Math.abs(p1.y - p0.y)
 
-            if (!pts) return null
+              return (
+                <rect
+                  key={a.id}
+                  x={left}
+                  y={top}
+                  width={width}
+                  height={height}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
+                />
+              )
+            }
 
-            return (
-              <polygon
-                key={a.id}
-                points={pts}
-                fill="rgba(255,0,0,0.12)"
-                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedRoiId ? 3 : 2}
-                onClick={() => setSelectedRoiId(a.id)}
-                style={{ cursor: 'pointer' }}
+            if (a.type === 'polygon') {
+              const pts = a.geometry.vertices
+                .map(toDisplayCoords)
+                .filter((p): p is DisplayPoint => !!p)
+                .map((p) => `${p.x},${p.y}`)
+                .join(' ')
 
-              />
-            )
-          }
+              if (!pts) return null
 
-          if (a.kind === 'probe' && a.type === 'point') {
-            const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
-            if (!p) return null
+              return (
+                <polygon
+                  key={a.id}
+                  points={pts}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
 
-            return (
-              <circle
-                key={a.id}
-                cx={p.x}
-                cy={p.y}
-                r={5}
-                fill="white"
-                stroke={a.groupId === selectedProbeGroupId ? 'lime' : 'red'}
-                strokeWidth={a.groupId === selectedProbeGroupId ? 3 : 2}
-                onClick={() => {
-                  setSelectedRoiId(null)
-                  setSelectedProbePointId(a.id)
-                  setSelectedProbeGroupId(a.groupId ?? null)
-                }}
-                style={{ cursor: 'pointer' }}
+                />
+              )
+            }
 
-              />
-            )
-          }
+            if (a.kind === 'probe' && a.type === 'point') {
+              const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
+              if (!p) return null
+
+              return (
+                <circle
+                  key={a.id}
+                  cx={p.x}
+                  cy={p.y}
+                  r={5}
+                  fill={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
+                  stroke={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedRoiId(null)
+                    setSelectedProbePointId(a.id)
+                    setSelectedProbeGroupId(a.groupId ?? null)
+                  }}
+                  style={{ cursor: 'pointer' }}
+
+                />
+              )
+            }
 
 
-          if (a.type === 'ellipse') {
-            const c = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy })
-            const rxPt = toDisplayCoords({ x: a.geometry.cx + a.geometry.rx, y: a.geometry.cy })
-            const ryPt = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy + a.geometry.ry })
-            if (!c || !rxPt || !ryPt) return null
+            if (a.type === 'ellipse') {
+              const c = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy })
+              const rxPt = toDisplayCoords({ x: a.geometry.cx + a.geometry.rx, y: a.geometry.cy })
+              const ryPt = toDisplayCoords({ x: a.geometry.cx, y: a.geometry.cy + a.geometry.ry })
+              if (!c || !rxPt || !ryPt) return null
 
-            const rx = Math.abs(rxPt.x - c.x)
-            const ry = Math.abs(ryPt.y - c.y)
+              const rx = Math.abs(rxPt.x - c.x)
+              const ry = Math.abs(ryPt.y - c.y)
 
-            return (
-              <ellipse
-                key={a.id}
-                cx={c.x}
-                cy={c.y}
-                rx={rx}
-                ry={ry}
-                fill="rgba(255,0,0,0.10)"
-                stroke={a.id === selectedRoiId ? 'lime' : 'red'}
-                strokeWidth={a.id === selectedRoiId ? 3 : 2}
-                onClick={() => setSelectedRoiId(a.id)}
-                style={{ cursor: 'pointer' }}
-              />
-            )
-          }
+              return (
+                <ellipse
+                  key={a.id}
+                  cx={c.x}
+                  cy={c.y}
+                  rx={rx}
+                  ry={ry}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
+                />
+              )
+            }
 
-          return null
-        })}
+            return null
+          })
+      })()}
     </svg>
   )
 
