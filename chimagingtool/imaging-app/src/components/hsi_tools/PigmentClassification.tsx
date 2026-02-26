@@ -16,6 +16,7 @@ interface PigmentClassificationModalProps {
 type TopMatch = {
   rank: number
   pigment_name: string
+  spectra_name_prefix?: string
   label_name?: string
   label_group?: string
   score: number
@@ -220,12 +221,12 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
                 background: '#fafafa',
               }}
             >
-              <h3 style={{ margin: '0 0 0.5rem 0', fontSize: 14 }}>Top 3 Matches</h3>
+                <h3 style={{ margin: '0 0 0.5rem 0', fontSize: 14 }}>Top 3 Matches</h3>
               <ol style={{ margin: 0, paddingLeft: '1.1rem' }}>
                 {topMatches.slice(0, 3).map((m) => (
                   <li key={`${m.rank}-${m.pigment_name}`} style={{ marginBottom: '0.4rem' }}>
-                    <strong>{m.label_name ?? m.pigment_name}</strong>
-                    {m.label_group ? ` (${m.label_group})` : ''} - score {m.score.toFixed(4)}
+                    <strong>{(m.label_name && m.label_name.trim()) || m.pigment_name}</strong>
+                    {` (${m.spectra_name_prefix ?? m.pigment_name}) - similarity score ${m.score.toFixed(4)}`}
                   </li>
                 ))}
               </ol>

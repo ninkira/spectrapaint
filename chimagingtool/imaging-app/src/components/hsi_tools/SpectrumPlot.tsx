@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+﻿import React, { useMemo, useState } from 'react'
 import Plot from 'react-plotly.js'
 import type { Data, Layout } from 'plotly.js'
 
@@ -87,13 +87,13 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
     const upper = usedStats.mean.map((m, i) => m + usedStats.std[i])
 
     data.push(
-      { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1sigma', line: { width: 0 } },
+      { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1\u03C3', line: { width: 0 } },
       {
         x: wl,
         y: upper,
         type: 'scatter',
         mode: 'lines',
-        name: '+/-1sigma band',
+        name: '\u00B11\u03C3 band',
         line: { width: 0 },
         fill: 'tonexty',
         fillcolor: 'rgba(59,130,246,0.2)',
@@ -127,7 +127,12 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
     autosize: true,
     title: { text: title },
     margin: { l: 50, r: 20, t: 40, b: 50 },
-    xaxis: { title: { text: 'Wavelength (nm)' } },
+    xaxis: {
+      title: { text: 'Wavelength (nm)' },
+      tickmode: 'linear',
+      dtick: 100,
+      tick0: Math.ceil(wl[0] / 100) * 100,
+    },
     yaxis: { title: { text: 'Intensity / Reflectance' } },
   }
 
@@ -138,7 +143,7 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
           {showSignals ? 'Hide signals' : 'Show signals'}
         </button>
         <button onClick={() => setShowStdBand((v) => !v)}>
-          {showStdBand ? 'Hide +/-1sigma' : 'Show +/-1sigma'}
+          {showStdBand ? 'Hide \u00B11\u03C3' : 'Show \u00B11\u03C3'}
         </button>
       </div>
 
@@ -148,3 +153,5 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
 }
 
 export default SpectrumPlot
+
+

@@ -1,13 +1,11 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { getDatasetAnnotations, listDatasets, rgbUrl, saveDatasetAnnotations, visualUrl } from '../lib/api';
+import { listDatasets, rgbUrl, visualUrl } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import { useCallback } from 'react'
-import type { Spectrum } from '../components/hsi_tools/SpectrumPlot'
-import type { Layer } from './types'
 
 
-type SelectionMode = 'multiple' | 'rect' | 'ellipse' | 'line' | 'polygon'
+type SelectionMode = 'single' | 'multiple' | 'rect' | 'ellipse' | 'line' | 'polygon'
 type ViewState = { zoom: number; panX: number; panY: number }
 
 
@@ -27,8 +25,8 @@ type Ctx = {
   rgbImgUrl?: string;
 
   // Selection
-  selectionMode: SelectionMode | null;
-  setSelectionMode: (m: SelectionMode | null) => void;
+  selectionMode: SelectionMode;
+  setSelectionMode: (m: SelectionMode) => void;
   navigationMode: boolean
   setNavigationMode: (v: boolean) => void
   showSignalProcessing: boolean
@@ -44,8 +42,6 @@ type Ctx = {
   addAnnotation: (a: Annotation) => void
   updateAnnotation: (id: string, patch: Partial<Annotation>) => void
   removeAnnotation: (id: string) => void
-  setAnnotationsForDataset: (datasetId: string, items: Annotation[]) => void
-  saveAnnotationsForDataset: (datasetId: string, items?: Annotation[]) => Promise<void>
   clearProbePointsForDataset: (datasetId: string) => void
 
   // selected ROI
@@ -62,7 +58,7 @@ type Ctx = {
   selectedProbePointId: string | null
   setSelectedProbePointId: (id: string | null) => void
 
-  // Viewport (for pan/zoom)
+  // Viewport
   view: ViewState
   setView: (next: ViewState) => void
   zoomIn: () => void
@@ -77,7 +73,7 @@ export const useApp = () => useContext(Ctx);
 export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [datasets, setDatasets] = useState<DatasetMeta[]>([]);
-  const [dataset, setDataset] = useState<DatasetMeta>();
+const [dataset, setDataset] = useState<DatasetMeta>()
 
   const [datasetId, setDatasetId] = useState<string>();
 
@@ -107,20 +103,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAnnotations(prev => prev.map(a => (a.id === id ? { ...a, ...patch, updatedAt: new Date().toISOString() } : a)))
   }, [])
 
-  const setAnnotationsForDataset = useCallback((targetDatasetId: string, items: Annotation[]) => {
-    const sanitized = items.map((a) => ({ ...a, datasetId: targetDatasetId }))
-    setAnnotations((prev) => [
-      ...prev.filter((a) => a.datasetId !== targetDatasetId),
-      ...sanitized,
-    ])
-  }, [])
-
-  const saveAnnotationsForDataset = useCallback(async (targetDatasetId: string, items?: Annotation[]) => {
-    const datasetItems = (items ?? annotations.filter((a) => a.datasetId === targetDatasetId))
-      .map((a) => ({ ...a, datasetId: targetDatasetId }))
-    await saveDatasetAnnotations(targetDatasetId, datasetItems)
-  }, [annotations])
-
   const clearProbePointsForDataset = useCallback((datasetId: string) => {
     setAnnotations(prev =>
       prev.filter(a => !(a.datasetId === datasetId && a.kind === 'probe' && a.type === 'point'))
@@ -132,13 +114,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const toggleLayer = (id: string) => setDatasetId(id)
 
   // new for selection one or multiple pixels in the image
-  const [selectionMode, setSelectionMode] = useState<SelectionMode | null>(null)
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
   const [navigationMode, setNavigationMode] = useState(false)
   const [showSignalProcessing, setShowSignalProcessing] = useState(false)
-
-  const [selectedProbeGroupId, setSelectedProbeGroupId] = useState<string | null>(null)
-  const [probeSpectraByGroupId, setProbeSpectraByGroupId] = useState<Record<string, Spectrum[]>>({})
-  const [selectedProbePointId, setSelectedProbePointId] = useState<string | null>(null)
   const [view, setViewState] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
 
   const setView = useCallback((next: ViewState) => {
@@ -157,6 +135,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const resetView = useCallback(() => {
     setViewState({ zoom: 1, panX: 0, panY: 0 })
   }, [])
+
+  const [selectedProbeGroupId, setSelectedProbeGroupId] = useState<string | null>(null)
+  const [probeSpectraByGroupId, setProbeSpectraByGroupId] = useState<Record<string, Spectrum[]>>({})
+  const [selectedProbePointId, setSelectedProbePointId] = useState<string | null>(null)
 
   const setProbeSpectraForGroup = (id: string, spectra: Spectrum[]) => {
     setProbeSpectraByGroupId(prev => ({ ...prev, [id]: spectra }))
@@ -196,34 +178,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [datasetId, datasets]);
 
   useEffect(() => {
-    if (!datasetId) return
-    let cancelled = false
-
-    void getDatasetAnnotations(datasetId)
-      .then((items) => {
-        if (cancelled) return
-        setAnnotationsForDataset(datasetId, items)
-      })
-      .catch((err) => {
-        console.error('Failed to load persisted annotations', err)
-      })
-
-    return () => { cancelled = true }
-  }, [datasetId, setAnnotationsForDataset])
-
-  useEffect(() => {
     if (!datasetId || !dataset) return
+
+    const cacheBuster = `&t=${Date.now()}`
     if (dataset.type === 'hsi') {
-      const u = rgbUrl(datasetId, rgbBands.r, rgbBands.g, rgbBands.b)
+      const u = rgbUrl(datasetId, rgbBands.r, rgbBands.g, rgbBands.b) + cacheBuster
       setRgbImgUrl(u)
       return
     }
 
-    const targetWidth =
-      typeof window !== 'undefined'
-        ? Math.max(900, Math.round(window.innerWidth * 0.65))
-        : undefined
-    const u = visualUrl(datasetId, targetWidth)
+    const u = `${visualUrl(datasetId)}?t=${Date.now()}`
     setRgbImgUrl(u)
   }, [datasetId, dataset, rgbBands]);
 
@@ -261,8 +225,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addAnnotation,
     updateAnnotation,
     removeAnnotation,
-    setAnnotationsForDataset,
-    saveAnnotationsForDataset,
     clearProbePointsForDataset,
 
     // selected ROI
@@ -295,8 +257,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     selectedSpectra,
     annotations,
     updateAnnotation,
-    setAnnotationsForDataset,
-    saveAnnotationsForDataset,
     clearProbePointsForDataset,
     selectedRoiId,
     roiSpectraById,

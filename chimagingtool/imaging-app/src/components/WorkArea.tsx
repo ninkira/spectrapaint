@@ -109,7 +109,7 @@ export default function WorkArea() {
   if (showSignalProcessing) {
     const title =
       isMultiPixelMode
-        ? 'Multiple spectra (clicked pixels)'
+        ? 'Multiple spectra (selected pixels)'
         : isRegionMode
           ? 'Region spectra (rectangle / ellipse)'
           : 'Selected spectra'
