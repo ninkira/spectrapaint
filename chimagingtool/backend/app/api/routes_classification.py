@@ -191,6 +191,14 @@ def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.nda
     finite_mask = np.isfinite(distances)
     if not np.all(finite_mask):
         distances = np.where(finite_mask, distances, np.inf)
+    if distances.shape[0] != library_matrix.shape[0]:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Distance size mismatch for method '{method_id}': "
+                f"expected {library_matrix.shape[0]}, got {distances.shape[0]}"
+            ),
+        )
     return distances
 
 

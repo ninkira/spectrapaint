@@ -29,6 +29,19 @@ interface SpectrumPlotProps {
   title?: string
 }
 
+const normalizeSeries = (values: number[]): number[] => {
+  if (!values.length) return values
+  let min = values[0]
+  let max = values[0]
+  for (let i = 1; i < values.length; i += 1) {
+    if (values[i] < min) min = values[i]
+    if (values[i] > max) max = values[i]
+  }
+  const range = max - min
+  if (range <= Number.EPSILON) return values.map(() => 0)
+  return values.map((v) => (v - min) / range)
+}
+
 const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
   spectra = [],
   wavelengthsNm,
@@ -38,6 +51,7 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
 }) => {
   const [showSignals, setShowSignals] = useState(false)
   const [showStdBand, setShowStdBand] = useState(true)
+  const [normalizeSignals, setNormalizeSignals] = useState(false)
 
   const nonNull = useMemo(
     () => spectra.filter((s): s is Exclude<Spectrum, null> => !!s),
@@ -63,12 +77,51 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
   }, [nonNull, wl])
 
   const usedStats = stats ?? fallbackStats
-  if (!wl.length || !usedStats) return <div style={{ padding: '1rem' }}>No spectra available.</div>
+
+  const normalizedSignals = useMemo(
+    () =>
+      normalizeSignals
+        ? nonNull.map((s) => ({
+            ...s,
+            values: normalizeSeries(s.values),
+          }))
+        : nonNull,
+    [nonNull, normalizeSignals]
+  )
+
+  const normalizedStatsFromSignals = useMemo(() => {
+    if (!normalizeSignals || !normalizedSignals.length || !wl.length) return null
+    const n = normalizedSignals.length
+    const nBands = wl.length
+    const mean = new Array(nBands).fill(0)
+    const std = new Array(nBands).fill(0)
+
+    for (const s of normalizedSignals) for (let i = 0; i < nBands; i += 1) mean[i] += s.values[i]
+    for (let i = 0; i < nBands; i += 1) mean[i] /= n
+    for (const s of normalizedSignals) for (let i = 0; i < nBands; i += 1) std[i] += (s.values[i] - mean[i]) ** 2
+    for (let i = 0; i < nBands; i += 1) std[i] = Math.sqrt(std[i] / (n > 1 ? n - 1 : 1))
+
+    return { n_pixels: n, mean, std }
+  }, [normalizeSignals, normalizedSignals, wl])
+
+  const scaledBackendStats = useMemo(() => {
+    if (!usedStats) return null
+    if (!normalizeSignals) return usedStats
+    const mean = normalizeSeries(usedStats.mean)
+    const minMean = Math.min(...usedStats.mean)
+    const maxMean = Math.max(...usedStats.mean)
+    const range = Math.max(maxMean - minMean, Number.EPSILON)
+    const std = usedStats.std.map((v) => v / range)
+    return { n_pixels: usedStats.n_pixels, mean, std }
+  }, [normalizeSignals, usedStats])
+
+  const displayedStats = normalizedStatsFromSignals ?? scaledBackendStats
+  if (!wl.length || !displayedStats) return <div style={{ padding: '1rem' }}>No spectra available.</div>
 
   const data: Data[] = []
 
   if (showSignals) {
-    for (const s of nonNull) {
+    for (const s of normalizedSignals) {
       data.push({
         x: wl,
         y: s.values,
@@ -83,8 +136,8 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
   }
 
   if (showStdBand) {
-    const lower = usedStats.mean.map((m, i) => m - usedStats.std[i])
-    const upper = usedStats.mean.map((m, i) => m + usedStats.std[i])
+    const lower = displayedStats.mean.map((m, i) => m - displayedStats.std[i])
+    const upper = displayedStats.mean.map((m, i) => m + displayedStats.std[i])
 
     data.push(
       { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1\u03C3', line: { width: 0 } },
@@ -103,10 +156,10 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
 
   data.push({
     x: wl,
-    y: usedStats.mean,
+    y: displayedStats.mean,
     type: 'scatter',
     mode: 'lines',
-    name: `Mean (n=${usedStats.n_pixels})`,
+    name: `Mean (n=${displayedStats.n_pixels})`,
     line: { color: '#111', width: 2 },
   })
 
@@ -115,7 +168,7 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
     if (xAxis.length !== match.values.length) continue
     data.push({
       x: xAxis,
-      y: match.values,
+      y: normalizeSignals ? normalizeSeries(match.values) : match.values,
       type: 'scatter',
       mode: 'lines',
       name: match.name,
@@ -133,7 +186,7 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
       dtick: 100,
       tick0: Math.ceil(wl[0] / 100) * 100,
     },
-    yaxis: { title: { text: 'Intensity / Reflectance' } },
+    yaxis: { title: { text: normalizeSignals ? 'Normalized intensity (0-1)' : 'Intensity / Reflectance' } },
   }
 
   return (
@@ -144,6 +197,9 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
         </button>
         <button onClick={() => setShowStdBand((v) => !v)}>
           {showStdBand ? 'Hide \u00B11\u03C3' : 'Show \u00B11\u03C3'}
+        </button>
+        <button onClick={() => setNormalizeSignals((v) => !v)}>
+          {normalizeSignals ? 'Show raw values' : 'Normalise signals'}
         </button>
       </div>
 
