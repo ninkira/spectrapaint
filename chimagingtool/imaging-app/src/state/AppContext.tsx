@@ -65,6 +65,9 @@ type Ctx = {
   zoomOut: () => void
   resetView: () => void
 
+  // Layout
+  primaryWidth: number
+  setPrimaryWidth: (v: number) => void
 };
 
 const Ctx = createContext<Ctx>(null as any);
@@ -117,6 +120,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
   const [navigationMode, setNavigationMode] = useState(false)
   const [showSignalProcessing, setShowSignalProcessing] = useState(false)
+  const [primaryWidth, setPrimaryWidth] = useState(600)
   const [view, setViewState] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
 
   const setView = useCallback((next: ViewState) => {
@@ -244,6 +248,8 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     zoomIn,
     zoomOut,
     resetView,
+    primaryWidth,
+    setPrimaryWidth,
 
   }), [
     fileLayers,
@@ -270,6 +276,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     setSelectedProbePointId,
     view,
     setView,
+    primaryWidth,
     zoomIn,
     zoomOut,
     resetView,

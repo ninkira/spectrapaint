@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import Plot from 'react-plotly.js'
 import type { Data, Layout } from 'plotly.js'
 
@@ -118,65 +118,69 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
   const displayedStats = normalizedStatsFromSignals ?? scaledBackendStats
   if (!wl.length || !displayedStats) return <div style={{ padding: '1rem' }}>No spectra available.</div>
 
-  const data: Data[] = []
+  const data: Data[] = useMemo(() => {
+    const d: Data[] = []
 
-  if (showSignals) {
-    for (const s of normalizedSignals) {
-      data.push({
-        x: wl,
-        y: s.values,
-        type: 'scatter',
-        mode: 'lines',
-        name: `(${s.x}, ${s.y})`,
-        line: { color: 'rgba(120,120,120,0.35)', width: 1 },
-        hoverinfo: 'skip',
-        showlegend: false,
-      })
-    }
-  }
-
-  if (showStdBand) {
-    const lower = displayedStats.mean.map((m, i) => m - displayedStats.std[i])
-    const upper = displayedStats.mean.map((m, i) => m + displayedStats.std[i])
-
-    data.push(
-      { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1\u03C3', line: { width: 0 } },
-      {
-        x: wl,
-        y: upper,
-        type: 'scatter',
-        mode: 'lines',
-        name: '\u00B11\u03C3 band',
-        line: { width: 0 },
-        fill: 'tonexty',
-        fillcolor: 'rgba(59,130,246,0.2)',
+    if (showSignals) {
+      for (const s of normalizedSignals) {
+        d.push({
+          x: wl,
+          y: s.values,
+          type: 'scatter',
+          mode: 'lines',
+          name: `(${s.x}, ${s.y})`,
+          line: { color: 'rgba(120,120,120,0.35)', width: 1 },
+          hoverinfo: 'skip',
+          showlegend: false,
+        })
       }
-    )
-  }
+    }
 
-  data.push({
-    x: wl,
-    y: displayedStats.mean,
-    type: 'scatter',
-    mode: 'lines',
-    name: `Mean (n=${displayedStats.n_pixels})`,
-    line: { color: '#111', width: 2 },
-  })
+    if (showStdBand) {
+      const lower = displayedStats.mean.map((m, i) => m - displayedStats.std[i])
+      const upper = displayedStats.mean.map((m, i) => m + displayedStats.std[i])
 
-  for (const match of comparisonSpectra) {
-    const xAxis = match.wavelengths_nm && match.wavelengths_nm.length ? match.wavelengths_nm : wl
-    if (xAxis.length !== match.values.length) continue
-    data.push({
-      x: xAxis,
-      y: normalizeSignals ? normalizeSeries(match.values) : match.values,
+      d.push(
+        { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1\u03C3', line: { width: 0 } },
+        {
+          x: wl,
+          y: upper,
+          type: 'scatter',
+          mode: 'lines',
+          name: '\u00B11\u03C3 band',
+          line: { width: 0 },
+          fill: 'tonexty',
+          fillcolor: 'rgba(59,130,246,0.2)',
+        }
+      )
+    }
+
+    d.push({
+      x: wl,
+      y: displayedStats.mean,
       type: 'scatter',
       mode: 'lines',
-      name: match.name,
-      line: { width: 2 },
+      name: `Mean (n=${displayedStats.n_pixels})`,
+      line: { color: '#111', width: 2 },
     })
-  }
 
-  const layout: Partial<Layout> = {
+    for (const match of comparisonSpectra) {
+      const xAxis = match.wavelengths_nm && match.wavelengths_nm.length ? match.wavelengths_nm : wl
+      if (xAxis.length !== match.values.length) continue
+      d.push({
+        x: xAxis,
+        y: normalizeSignals ? normalizeSeries(match.values) : match.values,
+        type: 'scatter',
+        mode: 'lines',
+        name: match.name,
+        line: { width: 2 },
+      })
+    }
+
+    return d
+  }, [normalizedSignals, wl, displayedStats, showSignals, showStdBand, normalizeSignals, comparisonSpectra])
+
+  const layout: Partial<Layout> = useMemo(() => ({
     autosize: true,
     title: { text: title },
     margin: { l: 50, r: 20, t: 40, b: 50 },
@@ -187,7 +191,7 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
       tick0: Math.ceil(wl[0] / 100) * 100,
     },
     yaxis: { title: { text: normalizeSignals ? 'Normalized intensity (0-1)' : 'Intensity / Reflectance' } },
-  }
+  }), [title, wl, normalizeSignals])
 
   return (
     <div>
@@ -209,5 +213,3 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
 }
 
 export default SpectrumPlot
-
-
