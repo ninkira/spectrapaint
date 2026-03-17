@@ -1,5 +1,5 @@
 // PrimaryDisplay.tsx
-import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
@@ -13,7 +13,7 @@ interface PrimaryDisplayProps {
 type DisplayPoint = { x: number; y: number } /* Image Render Coord */
 type ImagePoint = { x: number; y: number } /* Actual HSI Coors */
 
-type Polygon = { vertices: ImagePoint[] }
+type Polygon = { id: string; vertices: ImagePoint[] }
 
 
 export default function PrimaryDisplay({
@@ -59,6 +59,19 @@ export default function PrimaryDisplay({
   const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
 
   const [probeGroupId, setProbeGroupId] = useState<string | null>(null)
+  const rafId = useRef(0)
+  const cachedRect = useRef<DOMRect | null>(null)
+
+  // Keep cachedRect in sync with wrapper size
+  useEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    const updateRect = () => { cachedRect.current = wrapper.getBoundingClientRect() }
+    updateRect()
+    const ro = new ResizeObserver(updateRect)
+    ro.observe(wrapper)
+    return () => ro.disconnect()
+  })
 
   useEffect(() => {
     if (selectionMode === 'multiple') {
@@ -124,7 +137,7 @@ export default function PrimaryDisplay({
       imgVerts.push(iv)
     }
 
-    setPolygons((prev) => [...prev, { vertices: imgVerts }])
+    setPolygons((prev) => [...prev, { id: crypto.randomUUID(), vertices: imgVerts }])
 
     const ann: PolygonAnn = {
       id: crypto.randomUUID(),
@@ -196,10 +209,9 @@ export default function PrimaryDisplay({
   // ---- helper: wrapper coords -> image coords ----
   const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
     const img = imgRef.current
-    const wrapper = wrapperRef.current
-    if (!img || !wrapper) return null
+    const rect = cachedRect.current
+    if (!img || !rect) return null
 
-    const rect = wrapper.getBoundingClientRect()
     if (!img.naturalWidth || !img.naturalHeight) return null
     if (!rect.width || !rect.height) return null
 
@@ -211,10 +223,7 @@ export default function PrimaryDisplay({
     const y = Math.floor(display.y * scaleY)
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
-    return {
-      x,
-      y,
-    }
+    return { x, y }
   }
 
   const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number) => {
@@ -287,12 +296,11 @@ export default function PrimaryDisplay({
 
   }
 
-  const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
+  const toDisplayCoords = useCallback((imgPt: ImagePoint): DisplayPoint | null => {
     const img = imgRef.current
-    const wrapper = wrapperRef.current
-    if (!img || !wrapper) return null
+    const rect = cachedRect.current
+    if (!img || !rect) return null
 
-    const rect = wrapper.getBoundingClientRect()
     if (!img.naturalWidth || !img.naturalHeight) return null
     if (!rect.width || !rect.height) return null
 
@@ -305,10 +313,13 @@ export default function PrimaryDisplay({
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
     return { x, y }
-  }
+  }, [])
   const hasActiveDraft =
     dragStart !== null ||
     draftVertices !== null
+
+  // Clean up pending RAF on unmount
+  useEffect(() => () => cancelAnimationFrame(rafId.current), [])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -329,12 +340,11 @@ export default function PrimaryDisplay({
 
   // ---- mouse handlers on wrapper ----
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
+    const rect = cachedRect.current
+    if (!rect) return
 
     e.preventDefault()
 
-    const rect = wrapper.getBoundingClientRect()
     const displayPt: DisplayPoint = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
@@ -384,39 +394,44 @@ export default function PrimaryDisplay({
   }
 
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
-
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
     e.preventDefault()
 
-    const rect = wrapper.getBoundingClientRect()
+    const rect = cachedRect.current
+    if (!rect) return
+
+    // Capture values from the synthetic event before it's recycled
+    const clientX = e.clientX
+    const clientY = e.clientY
     const displayPt: DisplayPoint = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    }
-    const contentPt = toContentCoords(displayPt)
-
-    if (navigationMode && panStartRef.current) {
-      const dx = e.clientX - panStartRef.current.x
-      const dy = e.clientY - panStartRef.current.y
-      setView({
-        zoom: view.zoom,
-        panX: panStartRef.current.panX + dx,
-        panY: panStartRef.current.panY + dy,
-      })
-      return
+      x: clientX - rect.left,
+      y: clientY - rect.top,
     }
 
-    // box preview
-    if (isBoxMode && dragStart) {
-      setDragCurrent(contentPt)
-    }
+    cancelAnimationFrame(rafId.current)
+    rafId.current = requestAnimationFrame(() => {
+      const contentPt = toContentCoords(displayPt)
 
-    // polygon preview: update hover point while drawing
-    if (isPolygonLikeMode && draftVertices) {
-      setDraftHover(contentPt)
-    }
+      if (navigationMode && panStartRef.current) {
+        const dx = clientX - panStartRef.current.x
+        const dy = clientY - panStartRef.current.y
+        setView({
+          zoom: view.zoom,
+          panX: panStartRef.current.panX + dx,
+          panY: panStartRef.current.panY + dy,
+        })
+        return
+      }
 
+      // box preview
+      if (isBoxMode && dragStart) {
+        setDragCurrent(contentPt)
+      }
+
+      // polygon preview: update hover point while drawing
+      if (isPolygonLikeMode && draftVertices) {
+        setDraftHover(contentPt)
+      }
+    })
   }
 
 
@@ -567,11 +582,10 @@ export default function PrimaryDisplay({
 
   const handleWheel = (e: WheelEvent<HTMLDivElement>) => {
     if (!navigationMode) return
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
+    const rect = cachedRect.current
+    if (!rect) return
 
     e.preventDefault()
-    const rect = wrapper.getBoundingClientRect()
     const mouseX = e.clientX - rect.left
     const mouseY = e.clientY - rect.top
 
@@ -642,7 +656,7 @@ export default function PrimaryDisplay({
   }
 
 
-  const savedOverlay = (
+  const savedOverlay = useMemo(() => (
     <svg
       style={{
         position: 'absolute',
@@ -785,7 +799,7 @@ export default function PrimaryDisplay({
           })
       })()}
     </svg>
-  )
+  ), [annotations, dataset, selectedRoiId, selectedProbePointId, navigationMode, toDisplayCoords, setSelectedProbePointId, setSelectedRoiId, setSelectedProbeGroupId])
 
   if (polygons.length > 0 || (draftVertices && draftVertices.length > 0)) {
     polygonOverlay = (
@@ -812,7 +826,7 @@ export default function PrimaryDisplay({
 
           return (
             <polygon
-              key={idx}
+              key={poly.id}
               points={pts}
               fill="rgba(255,0,0,0.12)"
               stroke="red"

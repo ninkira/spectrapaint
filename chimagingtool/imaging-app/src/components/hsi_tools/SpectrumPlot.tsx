@@ -66,73 +66,77 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
   const usedStats = stats ?? fallbackStats
   if (!wl.length || !usedStats) return <div style={{ padding: '1rem' }}>No spectra available.</div>
 
-  const data: Data[] = []
+  const data: Data[] = useMemo(() => {
+    const d: Data[] = []
 
-  if (showSignals) {
-    for (const s of nonNull) {
-      data.push({
-        x: wl,
-        y: s.values,
-        type: 'scatter',
-        mode: 'lines',
-        name: `(${s.x}, ${s.y})`,
-        line: { color: 'rgba(120,120,120,0.35)', width: 1 },
-        hoverinfo: 'skip',
-        showlegend: false,
-      })
-    }
-  }
-
-  if (showStdBand) {
-    const lower = usedStats.mean.map((m, i) => m - usedStats.std[i])
-    const upper = usedStats.mean.map((m, i) => m + usedStats.std[i])
-
-    data.push(
-      { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1sigma', line: { width: 0 } },
-      {
-        x: wl,
-        y: upper,
-        type: 'scatter',
-        mode: 'lines',
-        name: '+/-1sigma band',
-        line: { width: 0 },
-        fill: 'tonexty',
-        fillcolor: 'rgba(59,130,246,0.2)',
+    if (showSignals) {
+      for (const s of nonNull) {
+        d.push({
+          x: wl,
+          y: s.values,
+          type: 'scatter',
+          mode: 'lines',
+          name: `(${s.x}, ${s.y})`,
+          line: { color: 'rgba(120,120,120,0.35)', width: 1 },
+          hoverinfo: 'skip',
+          showlegend: false,
+        })
       }
-    )
-  }
-
-  data.push({
-    x: wl,
-    y: usedStats.mean,
-    type: 'scatter',
-    mode: 'lines',
-    name: `Mean (n=${usedStats.n_pixels})`,
-    line: { color: '#111', width: 2 },
-  })
-
-  if (showMatches) {
-    for (const match of comparisonSpectra) {
-      const xAxis = match.wavelengths_nm && match.wavelengths_nm.length ? match.wavelengths_nm : wl
-      if (xAxis.length !== match.values.length) continue
-      data.push({
-        x: xAxis,
-        y: match.values,
-        type: 'scatter',
-        mode: 'lines',
-        name: match.name,
-        line: { width: 2 },
-      })
     }
-  }
 
-  const layout: Partial<Layout> = {
+    if (showStdBand) {
+      const lower = usedStats.mean.map((m, i) => m - usedStats.std[i])
+      const upper = usedStats.mean.map((m, i) => m + usedStats.std[i])
+
+      d.push(
+        { x: wl, y: lower, type: 'scatter', mode: 'lines', name: 'Mean - 1sigma', line: { width: 0 } },
+        {
+          x: wl,
+          y: upper,
+          type: 'scatter',
+          mode: 'lines',
+          name: '+/-1sigma band',
+          line: { width: 0 },
+          fill: 'tonexty',
+          fillcolor: 'rgba(59,130,246,0.2)',
+        }
+      )
+    }
+
+    d.push({
+      x: wl,
+      y: usedStats.mean,
+      type: 'scatter',
+      mode: 'lines',
+      name: `Mean (n=${usedStats.n_pixels})`,
+      line: { color: '#111', width: 2 },
+    })
+
+    if (showMatches) {
+      for (const match of comparisonSpectra) {
+        const xAxis = match.wavelengths_nm && match.wavelengths_nm.length ? match.wavelengths_nm : wl
+        if (xAxis.length !== match.values.length) continue
+        d.push({
+          x: xAxis,
+          y: match.values,
+          type: 'scatter',
+          mode: 'lines',
+          name: match.name,
+          line: { width: 2 },
+        })
+      }
+    }
+
+    return d
+  }, [nonNull, wl, usedStats, showSignals, showStdBand, showMatches, comparisonSpectra])
+
+  const layout: Partial<Layout> = useMemo(() => ({
     autosize: true,
     title: { text: title },
     margin: { l: 50, r: 20, t: 40, b: 50 },
     xaxis: { title: { text: 'Wavelength (nm)' } },
     yaxis: { title: { text: 'Intensity / Reflectance' } },
-  }
+  }), [title])
 
   return (
     <div>

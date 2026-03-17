@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
 import './App.css'
 import { AppProvider, useApp } from './state/AppContext'
 import Toolbar from './components/Toolbar'
@@ -7,24 +7,13 @@ import DataManager from './components/LayerManager'
 import PrimaryDisplay from './components/PrimaryDisplay'
 import WorkArea from './components/WorkArea'
 
-type Ctx = {
-  layers: Layer[]
-  toggleLayer: (id: string) => void
-  dataset?: DatasetMeta
-  datasetId?: string
-  setDatasetId: (id: string) => void
-  rgbBands: { r: number; g: number; b: number }
-  setRgbBands: (r: number, g: number, b: number) => void
-  rgbImgUrl?: string
-
-  // 👇 add these two lines:
-  primaryWidth: number
-  setPrimaryWidth: (v: number) => void
-}
-
 
 function ResizableContent() {
   const { primaryWidth, setPrimaryWidth } = useApp()
+  const cleanupRef = useRef<(() => void) | null>(null)
+
+  // Remove lingering listeners if component unmounts mid-drag
+  useEffect(() => () => { cleanupRef.current?.() }, [])
 
   const startDrag = (e: React.MouseEvent<HTMLDivElement>) => {
     const startX = e.clientX
@@ -34,9 +23,11 @@ function ResizableContent() {
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      cleanupRef.current = null
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
+    cleanupRef.current = onUp
   }
 
   return (

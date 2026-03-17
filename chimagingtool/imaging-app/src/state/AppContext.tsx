@@ -67,6 +67,9 @@ type Ctx = {
   zoomOut: () => void
   resetView: () => void
 
+  // Layout
+  primaryWidth: number
+  setPrimaryWidth: (v: number) => void
 };
 
 const Ctx = createContext<Ctx>(null as any);
@@ -123,6 +126,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedProbeGroupId, setSelectedProbeGroupId] = useState<string | null>(null)
   const [probeSpectraByGroupId, setProbeSpectraByGroupId] = useState<Record<string, Spectrum[]>>({})
   const [selectedProbePointId, setSelectedProbePointId] = useState<string | null>(null)
+  const [primaryWidth, setPrimaryWidth] = useState(600)
   const [view, setViewState] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
 
   const setView = useCallback((next: ViewState) => {
@@ -248,6 +252,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     zoomIn,
     zoomOut,
     resetView,
+    primaryWidth,
+    setPrimaryWidth,
 
   }), [
     fileLayers,
@@ -274,6 +280,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedProbePointId,
     view,
     setView,
+    primaryWidth,
     zoomIn,
     zoomOut,
     resetView,
