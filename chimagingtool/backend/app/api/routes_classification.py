@@ -1,5 +1,8 @@
-import numpy as np
+﻿import logging
+import re
 from pathlib import Path
+
+import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from spectral import io as spyio
@@ -14,6 +17,7 @@ from ..services.dataset_store import get_dataset_record_or_404
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/classification/methods")
@@ -41,71 +45,154 @@ class PipelineRequest(BaseModel):
     top_k: int = 5
 
 
+def _strip_spectrum_suffix(name: str) -> str:
+    """
+    Normalize IDs like EB_1_2_p1_sh2 -> EB_1_2_p1 for metadata matching/display.
+    """
+    return re.sub(r"_sh\d+$", "", str(name).strip(), flags=re.IGNORECASE)
+
+
+def _norm_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
+
+
+def _norm_header(value: object) -> str:
+    return _norm_token(str(value))
+
+
+def _find_name_columns(columns: list[object]) -> tuple[int | None, int | None]:
+    prefix_idx = None
+    pname_idx = None
+    for i, col in enumerate(columns):
+        key = _norm_header(col)
+        if key == "spectranameprefix":
+            prefix_idx = i
+        if key in {"pigmentnamepname", "pigmentname"}:
+            pname_idx = i
+    return prefix_idx, pname_idx
+
+
+def _rows_from_excel(candidate: Path) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+
+    # First try pandas (handles many edge cases cleanly when available).
+    try:
+        import pandas as pd  # type: ignore
+
+        engines: list[str | None]
+        if candidate.suffix.lower() == ".xls":
+            engines = ["xlrd", None]
+        else:
+            engines = ["openpyxl", None]
+
+        for engine in engines:
+            try:
+                df = pd.read_excel(str(candidate), engine=engine) if engine else pd.read_excel(str(candidate))
+            except Exception:
+                continue
+
+            cols = [str(c).strip() for c in df.columns]
+            prefix_idx, pname_idx = _find_name_columns(cols)
+            if prefix_idx is None or pname_idx is None:
+                continue
+
+            prefix_col = cols[prefix_idx]
+            pname_col = cols[pname_idx]
+            for _, rec in df[[prefix_col, pname_col]].iterrows():
+                prefix_val = str(rec[prefix_col]).strip()
+                pname_val = str(rec[pname_col]).strip()
+                if prefix_val:
+                    rows.append((prefix_val, pname_val))
+            if rows:
+                return rows
+    except Exception:
+        pass
+
+    # Pandas unavailable/failed: fallback to direct readers.
+    suffix = candidate.suffix.lower()
+    if suffix == ".xls":
+        try:
+            import xlrd  # type: ignore
+
+            wb = xlrd.open_workbook(str(candidate))
+            sh = wb.sheet_by_index(0)
+            if sh.nrows <= 1:
+                return rows
+            headers = [sh.cell_value(0, c) for c in range(sh.ncols)]
+            prefix_idx, pname_idx = _find_name_columns(headers)
+            if prefix_idx is None or pname_idx is None:
+                return rows
+            for r in range(1, sh.nrows):
+                prefix_val = str(sh.cell_value(r, prefix_idx)).strip()
+                pname_val = str(sh.cell_value(r, pname_idx)).strip()
+                if prefix_val:
+                    rows.append((prefix_val, pname_val))
+        except Exception:
+            return rows
+    elif suffix == ".xlsx":
+        try:
+            from openpyxl import load_workbook  # type: ignore
+
+            wb = load_workbook(filename=str(candidate), read_only=True, data_only=True)
+            ws = wb.active
+            it = ws.iter_rows(values_only=True)
+            header_row = next(it, None)
+            if not header_row:
+                return rows
+            prefix_idx, pname_idx = _find_name_columns(list(header_row))
+            if prefix_idx is None or pname_idx is None:
+                return rows
+            for row in it:
+                prefix_val = str(row[prefix_idx] if prefix_idx < len(row) else "").strip()
+                pname_val = str(row[pname_idx] if pname_idx < len(row) else "").strip()
+                if prefix_val:
+                    rows.append((prefix_val, pname_val))
+        except Exception:
+            return rows
+    return rows
+
+
 def _resolve_label_for_match(
     library_dir: str,
     pigment_name: str,
-    found_pigment_index: int,
 ) -> dict:
-    """
-    Resolve human-friendly pigment label/group/colour from optional sidecar files.
-    This follows the prefix-matching logic provided by the user.
-    """
-    from pathlib import Path
-
+    """Resolve display label from Pigment name (pname) using spectra prefix match."""
     base = Path(library_dir)
-    excel_candidates = [
+    excel_candidates: list[Path] = []
+    for p in (
         base / "__pigmentlistZenodo_custom.xls",
         base / "__pigmentlistZenodo_custom.xlsx",
         base / "__pigmentlistZenodo.xls",
         base / "__pigmentlistZenodo.xlsx",
-    ]
-    colours_path = base / "HSI_averages_sRGB.npy"
+    ):
+        if p.exists():
+            excel_candidates.append(p)
+
+    # Project-level fallback for shared metadata file(s).
+    shared_root = Path(__file__).resolve().parent.parent / "data" / "old_man" / "spectral_libraries"
+    if shared_root.exists():
+        for pattern in ("**/__pigmentlistZenodo_custom.xls", "**/__pigmentlistZenodo_custom.xlsx", "**/__pigmentlistZenodo.xls", "**/__pigmentlistZenodo.xlsx"):
+            for p in sorted(shared_root.glob(pattern)):
+                if p not in excel_candidates:
+                    excel_candidates.append(p)
 
     label_name = pigment_name
-    label_group = "Additional Pigment"
-    colour = None
+    key_norm = _norm_token(_strip_spectrum_suffix(str(pigment_name).strip()))
 
-    # Optional colour lookup.
-    if colours_path.exists():
-        try:
-            pigments_colours = np.load(str(colours_path))
-            if 0 <= found_pigment_index < len(pigments_colours):
-                colour = np.asarray(pigments_colours[found_pigment_index]).tolist()
-        except Exception:
-            pass
+    for candidate in excel_candidates:
+        if not candidate.exists():
+            continue
+        for spectra_prefix, pname in _rows_from_excel(candidate):
+            prefix_norm = _norm_token(_strip_spectrum_suffix(spectra_prefix))
+            if not prefix_norm:
+                continue
+            if key_norm == prefix_norm or key_norm.startswith(prefix_norm) or prefix_norm.startswith(key_norm):
+                clean_pname = str(pname).strip()
+                if clean_pname:
+                    label_name = clean_pname
+                return {"label_name": label_name}
 
-    excel_path = next((p for p in excel_candidates if p.exists()), None)
-    if excel_path is None:
-        return {"label_name": label_name, "label_group": label_group, "colour": colour}
-
-    try:
-        import pandas as pd  # local import to keep startup resilient if pandas is absent
-
-        pigment_info_df = pd.read_excel(str(excel_path))
-        if "Spectra name prefix" not in pigment_info_df.columns:
-            return {"label_name": label_name, "label_group": label_group, "colour": colour}
-
-        search_str = pigment_name[:-4] if len(pigment_name) > 4 else pigment_name
-        mask = pigment_info_df["Spectra name prefix"].astype(str).str.contains(str(search_str), regex=False, na=False)
-        pigment_info_row = pigment_info_df[mask]
-        if pigment_info_row.empty:
-            return {"label_name": label_name, "label_group": label_group, "colour": colour}
-
-        row = pigment_info_row.iloc[0]
-        if "Pigment name (pname)" in pigment_info_row.columns:
-            val = row["Pigment name (pname)"]
-            if isinstance(val, str) and val.strip():
-                label_name = val.strip()
-
-        if "Pigment group (zip file)" in pigment_info_row.columns and not pd.isna(row["Pigment group (zip file)"]):
-            val = row["Pigment group (zip file)"]
-            if isinstance(val, str) and val.strip():
-                label_group = val.strip()
-    except Exception:
-        # Keep classification result usable even if metadata enrichment fails.
-        return {"label_name": label_name, "label_group": label_group, "colour": colour}
-
-    return {"label_name": label_name, "label_group": label_group, "colour": colour}
+    return {"label_name": label_name}
 
 
 def _parse_spectra_names(raw: object, count: int) -> list[str]:
@@ -126,14 +213,12 @@ def _load_library_matrix(reference_library: dict) -> tuple[np.ndarray, list[str]
     hdr_path = reference_library["hdr_path"]
     data_path = reference_library["data_path"]
     img = spyio.envi.open(hdr_path, data_path)
-    # SPy returns SpectralLibrary for library files (.hdr+.sli/.img) and SpyFile for images.
     if hasattr(img, "spectra"):
         arr = np.asarray(img.spectra, dtype=float)
     else:
         arr = np.asarray(img.load(), dtype=float)
 
     if arr.ndim == 3:
-        # Typical ENVI library shape: (n_spectra, 1, n_bands)
         arr = arr[:, 0, :]
     elif arr.ndim != 2:
         raise HTTPException(status_code=500, detail=f"Unsupported library array shape: {arr.shape}")
@@ -181,12 +266,19 @@ def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.nda
     finite_mask = np.isfinite(distances)
     if not np.all(finite_mask):
         distances = np.where(finite_mask, distances, np.inf)
+    if distances.shape[0] != library_matrix.shape[0]:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Distance size mismatch for method '{method_id}': "
+                f"expected {library_matrix.shape[0]}, got {distances.shape[0]}"
+            ),
+        )
     return distances
 
 
 @router.post("/classification/pipeline/run")
 def run_pipeline(req: PipelineRequest):
-    # Validate dataset and reference-library IDs early.
     get_dataset_record_or_404(req.dataset_id)
     reference_library = get_reference_library_or_404(req.reference_library_id)
 
@@ -201,8 +293,7 @@ def run_pipeline(req: PipelineRequest):
 
     query = np.asarray(req.mean_signal.values, dtype=float)
     library_matrix, pigment_names, library_wavelengths = _load_library_matrix(reference_library)
-    # Temporary pragmatic alignment: compare over the shared band count.
-    # TODO: replace with wavelength-based interpolation for physically correct alignment.
+
     min_bands = min(query.shape[0], library_matrix.shape[1])
     if min_bands <= 0:
         raise HTTPException(status_code=400, detail="No overlapping bands for classification")
@@ -216,26 +307,26 @@ def run_pipeline(req: PipelineRequest):
     distances = _compute_distances(req.classification_method_id, query, library_matrix)
     k = max(1, min(int(req.top_k), int(distances.shape[0])))
     order = np.argsort(distances)[:k]
-    # Use library file parent for sidecar metadata files.
     library_dir = str(Path(reference_library["hdr_path"]).parent)
 
-    top_matches = [
-        (
+    top_matches = []
+    for rank, idx in enumerate(order):
+        raw_name = pigment_names[int(idx)]
+        meta = _resolve_label_for_match(
+            library_dir=library_dir,
+            pigment_name=raw_name,
+        )
+        top_matches.append(
             {
                 "rank": rank + 1,
                 "index": int(idx),
-                "pigment_name": pigment_names[int(idx)],
+                "pigment_name": raw_name,
+                "spectra_name_prefix": _strip_spectrum_suffix(raw_name),
+                "label_name": meta.get("label_name", raw_name),
                 "score": float(distances[int(idx)]),
                 "values": library_matrix[int(idx)].tolist(),
             }
-            | _resolve_label_for_match(
-                library_dir=library_dir,
-                pigment_name=pigment_names[int(idx)],
-                found_pigment_index=int(idx),
-            )
         )
-        for rank, idx in enumerate(order)
-    ]
 
     results = {
         "preprocessing_method": req.preprocessing_method_id,

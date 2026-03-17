@@ -1,3 +1,5 @@
+import type { Annotation } from '../models/annotations'
+
 export type DatasetMeta = {
   id: string
   name: string
@@ -21,3 +23,19 @@ export const rgbUrl = (id: string, r: number, g: number, b: number, stretch='per
 
 export const visualUrl = (id: string, maxW?: number) =>
   `${base}/datasets/${id}/visual${maxW ? `?max_w=${Math.round(maxW)}` : ''}`;
+
+export async function getDatasetAnnotations(id: string): Promise<Annotation[]> {
+  const r = await fetch(`${base}/datasets/${id}/annotations`);
+  if (!r.ok) throw new Error('Failed to load annotations');
+  const data = await r.json() as { annotations?: Annotation[] }
+  return Array.isArray(data.annotations) ? data.annotations : []
+}
+
+export async function saveDatasetAnnotations(id: string, annotations: Annotation[]): Promise<void> {
+  const r = await fetch(`${base}/datasets/${id}/annotations`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ annotations }),
+  })
+  if (!r.ok) throw new Error('Failed to save annotations')
+}

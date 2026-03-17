@@ -1,9 +1,9 @@
 // PrimaryDisplay.tsx
-import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
-import type { RectAnn, EllipseAnn, PolygonAnn } from '../models/annotations'
+import type { Annotation, RectAnn, EllipseAnn, PolygonAnn, LineAnn } from '../models/annotations'
 
 interface PrimaryDisplayProps {
   onRegionSpectra?: (specs: Spectrum[]) => void // optional
@@ -13,7 +13,24 @@ interface PrimaryDisplayProps {
 type DisplayPoint = { x: number; y: number } /* Image Render Coord */
 type ImagePoint = { x: number; y: number } /* Actual HSI Coors */
 
-type Polygon = { vertices: ImagePoint[] }
+type Polygon = { id: string; vertices: ImagePoint[] }
+
+const polygonArea = (vertices: { x: number; y: number }[]): number => {
+  if (!vertices.length) return 0
+  let sum = 0
+  for (let i = 0; i < vertices.length; i += 1) {
+    const j = (i + 1) % vertices.length
+    sum += vertices[i].x * vertices[j].y - vertices[j].x * vertices[i].y
+  }
+  return Math.abs(sum) * 0.5
+}
+
+const annotationArea = (ann: Annotation): number => {
+  if (ann.type === 'rect') return Math.max(0, ann.geometry.w) * Math.max(0, ann.geometry.h)
+  if (ann.type === 'ellipse') return Math.PI * Math.max(0, ann.geometry.rx) * Math.max(0, ann.geometry.ry)
+  if (ann.type === 'polygon') return polygonArea(ann.geometry.vertices)
+  return 0
+}
 
 
 export default function PrimaryDisplay({
@@ -51,14 +68,25 @@ export default function PrimaryDisplay({
   const [dragStart, setDragStart] = useState<DisplayPoint | null>(null)
   const [dragCurrent, setDragCurrent] = useState<DisplayPoint | null>(null)
 
-  const [polygons, setPolygons] = useState<Polygon[]>([]) /* if lines are connected */
-
   // Draft polyline vertices while drawing (Display space)
   const [draftVertices, setDraftVertices] = useState<DisplayPoint[] | null>(null)
   // Current mouse position for preview edge (Display space)
   const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
 
   const [probeGroupId, setProbeGroupId] = useState<string | null>(null)
+  const rafId = useRef(0)
+  const cachedRect = useRef<DOMRect | null>(null)
+
+  // Keep cachedRect in sync with wrapper size
+  useEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    const updateRect = () => { cachedRect.current = wrapper.getBoundingClientRect() }
+    updateRect()
+    const ro = new ResizeObserver(updateRect)
+    ro.observe(wrapper)
+    return () => ro.disconnect()
+  })
 
   useEffect(() => {
     if (selectionMode === 'multiple') {
@@ -124,7 +152,7 @@ export default function PrimaryDisplay({
       imgVerts.push(iv)
     }
 
-    setPolygons((prev) => [...prev, { vertices: imgVerts }])
+    setPolygons((prev) => [...prev, { id: crypto.randomUUID(), vertices: imgVerts }])
 
     const ann: PolygonAnn = {
       id: crypto.randomUUID(),
@@ -174,6 +202,84 @@ export default function PrimaryDisplay({
 
   }
 
+  const fetchSpectraOnLine = async (start: ImagePoint, end: ImagePoint) => {
+    if (!dataset) return null
+
+    const params = new URLSearchParams({
+      x0: start.x.toString(),
+      y0: start.y.toString(),
+      x1: end.x.toString(),
+      y1: end.y.toString(),
+    })
+
+    const res = await fetch(`/api/datasets/${dataset.id}/spectra-line?${params.toString()}`)
+    if (!res.ok) {
+      console.error('Failed to fetch line spectra', await res.text())
+      return null
+    }
+    return (await res.json()) as { spectra: Spectrum[] }
+  }
+
+  const finalizeLineFromDraft = (verts: DisplayPoint[]) => {
+    if (!dataset) return
+    if (verts.length < 2) return
+
+    const imgPoints: ImagePoint[] = []
+    for (const v of verts) {
+      const iv = toImageCoords(v)
+      if (!iv) return
+      imgPoints.push(iv)
+    }
+
+    const ann: LineAnn = {
+      id: crypto.randomUUID(),
+      datasetId: dataset.id,
+      kind: 'roi',
+      type: 'line',
+      createdAt: new Date().toISOString(),
+      geometry: { points: imgPoints },
+      label: 'ROI',
+    }
+
+    addAnnotation(ann)
+    setSelectedProbePointId(null)
+    setSelectedRoiId(ann.id)
+
+    if (!isHsiDataset) {
+      setDraftVertices(null)
+      setDraftHover(null)
+      return
+    }
+
+    void (async () => {
+      const allSpectra: Spectrum[] = []
+      for (let i = 0; i < imgPoints.length - 1; i += 1) {
+        const segment = await fetchSpectraOnLine(imgPoints[i], imgPoints[i + 1])
+        if (!segment?.spectra) continue
+
+        const seg = segment.spectra
+        if (allSpectra.length > 0 && seg.length > 0) {
+          // Avoid duplicating shared vertex spectra between adjacent segments.
+          allSpectra.push(...seg.slice(1))
+        } else {
+          allSpectra.push(...seg)
+        }
+      }
+
+      if (allSpectra.length === 0) return
+
+      onRegionSpectra?.(allSpectra)
+      for (const s of allSpectra) {
+        if (s) addSpectrum(s)
+      }
+      setRoiSpectraForId(ann.id, allSpectra)
+      setSelectedRoiId(ann.id)
+    })()
+
+    setDraftVertices(null)
+    setDraftHover(null)
+  }
+
 
 
 
@@ -196,10 +302,9 @@ export default function PrimaryDisplay({
   // ---- helper: wrapper coords -> image coords ----
   const toImageCoords = (display: DisplayPoint): ImagePoint | null => {
     const img = imgRef.current
-    const wrapper = wrapperRef.current
-    if (!img || !wrapper) return null
+    const rect = cachedRect.current
+    if (!img || !rect) return null
 
-    const rect = wrapper.getBoundingClientRect()
     if (!img.naturalWidth || !img.naturalHeight) return null
     if (!rect.width || !rect.height) return null
 
@@ -211,10 +316,7 @@ export default function PrimaryDisplay({
     const y = Math.floor(display.y * scaleY)
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
-    return {
-      x,
-      y,
-    }
+    return { x, y }
   }
 
   const fetchSpectraInPolygon = async (vertices: ImagePoint[], maxPoints?: number) => {
@@ -287,12 +389,11 @@ export default function PrimaryDisplay({
 
   }
 
-  const toDisplayCoords = (imgPt: ImagePoint): DisplayPoint | null => {
+  const toDisplayCoords = useCallback((imgPt: ImagePoint): DisplayPoint | null => {
     const img = imgRef.current
-    const wrapper = wrapperRef.current
-    if (!img || !wrapper) return null
+    const rect = cachedRect.current
+    if (!img || !rect) return null
 
-    const rect = wrapper.getBoundingClientRect()
     if (!img.naturalWidth || !img.naturalHeight) return null
     if (!rect.width || !rect.height) return null
 
@@ -305,13 +406,21 @@ export default function PrimaryDisplay({
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
     return { x, y }
-  }
+  }, [])
   const hasActiveDraft =
     dragStart !== null ||
     draftVertices !== null
 
+  // Clean up pending RAF on unmount
+  useEffect(() => () => cancelAnimationFrame(rafId.current), [])
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && selectionMode === 'line' && draftVertices && draftVertices.length >= 2) {
+        e.preventDefault()
+        finalizeLineFromDraft(draftVertices)
+        return
+      }
       if (e.key !== 'Escape') return
       if (!hasActiveDraft) return
       e.preventDefault()
@@ -325,16 +434,15 @@ export default function PrimaryDisplay({
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [hasActiveDraft])
+  }, [hasActiveDraft, selectionMode, draftVertices])
 
   // ---- mouse handlers on wrapper ----
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
+    const rect = cachedRect.current
+    if (!rect) return
 
     e.preventDefault()
 
-    const rect = wrapper.getBoundingClientRect()
     const displayPt: DisplayPoint = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
@@ -365,13 +473,18 @@ export default function PrimaryDisplay({
     }
 
     else if (isPolygonLikeMode) {
+      if (selectionMode === 'line' && draftVertices && draftVertices.length >= 2 && e.detail >= 2) {
+        finalizeLineFromDraft(draftVertices)
+        return
+      }
+
       if (!draftVertices) {
         setDraftVertices([contentPt])
         setDraftHover(contentPt)
         return
       }
 
-      if (isCloseToStart(contentPt, draftVertices)) {
+      if (selectionMode === 'polygon' && isCloseToStart(contentPt, draftVertices)) {
         finalizePolygonFromDraft(draftVertices)
         return
       }
@@ -384,39 +497,44 @@ export default function PrimaryDisplay({
   }
 
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
-
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
     e.preventDefault()
 
-    const rect = wrapper.getBoundingClientRect()
+    const rect = cachedRect.current
+    if (!rect) return
+
+    // Capture values from the synthetic event before it's recycled
+    const clientX = e.clientX
+    const clientY = e.clientY
     const displayPt: DisplayPoint = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    }
-    const contentPt = toContentCoords(displayPt)
-
-    if (navigationMode && panStartRef.current) {
-      const dx = e.clientX - panStartRef.current.x
-      const dy = e.clientY - panStartRef.current.y
-      setView({
-        zoom: view.zoom,
-        panX: panStartRef.current.panX + dx,
-        panY: panStartRef.current.panY + dy,
-      })
-      return
+      x: clientX - rect.left,
+      y: clientY - rect.top,
     }
 
-    // box preview
-    if (isBoxMode && dragStart) {
-      setDragCurrent(contentPt)
-    }
+    cancelAnimationFrame(rafId.current)
+    rafId.current = requestAnimationFrame(() => {
+      const contentPt = toContentCoords(displayPt)
 
-    // polygon preview: update hover point while drawing
-    if (isPolygonLikeMode && draftVertices) {
-      setDraftHover(contentPt)
-    }
+      if (navigationMode && panStartRef.current) {
+        const dx = clientX - panStartRef.current.x
+        const dy = clientY - panStartRef.current.y
+        setView({
+          zoom: view.zoom,
+          panX: panStartRef.current.panX + dx,
+          panY: panStartRef.current.panY + dy,
+        })
+        return
+      }
 
+      // box preview
+      if (isBoxMode && dragStart) {
+        setDragCurrent(contentPt)
+      }
+
+      // polygon preview: update hover point while drawing
+      if (isPolygonLikeMode && draftVertices) {
+        setDraftHover(contentPt)
+      }
+    })
   }
 
 
@@ -567,11 +685,10 @@ export default function PrimaryDisplay({
 
   const handleWheel = (e: WheelEvent<HTMLDivElement>) => {
     if (!navigationMode) return
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
+    const rect = cachedRect.current
+    if (!rect) return
 
     e.preventDefault()
-    const rect = wrapper.getBoundingClientRect()
     const mouseX = e.clientX - rect.left
     const mouseY = e.clientY - rect.top
 
@@ -642,7 +759,7 @@ export default function PrimaryDisplay({
   }
 
 
-  const savedOverlay = (
+  const savedOverlay = useMemo(() => (
     <svg
       style={{
         position: 'absolute',
@@ -661,8 +778,13 @@ export default function PrimaryDisplay({
         const INACTIVE_FILL = 'rgba(227,181,5,0.12)'
         const selectedId = selectedRoiId ?? selectedProbePointId
 
-        return annotations
-          .filter(a => dataset && a.datasetId === dataset.id)
+        const drawOrderedAnnotations = annotations
+          .filter((a) => dataset && a.datasetId === dataset.id)
+          .slice()
+          // Draw large ROIs first so smaller ROIs remain clickable on top.
+          .sort((a, b) => annotationArea(b) - annotationArea(a))
+
+        return drawOrderedAnnotations
           .map(a => {
             const isSelected = a.id === selectedId
             const stroke = isSelected ? SELECTED_STROKE : INACTIVE_STROKE
@@ -720,6 +842,30 @@ export default function PrimaryDisplay({
                   }}
                   style={{ cursor: 'pointer' }}
 
+                />
+              )
+            }
+
+            if (a.type === 'line') {
+              const pts = a.geometry.points
+                .map(toDisplayCoords)
+                .filter((p): p is DisplayPoint => !!p)
+                .map((p) => `${p.x},${p.y}`)
+                .join(' ')
+              if (!pts) return null
+
+              return (
+                <polyline
+                  key={a.id}
+                  points={pts}
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  onClick={() => {
+                    setSelectedProbePointId(null)
+                    setSelectedRoiId(a.id)
+                  }}
+                  style={{ cursor: 'pointer' }}
                 />
               )
             }
@@ -785,9 +931,9 @@ export default function PrimaryDisplay({
           })
       })()}
     </svg>
-  )
+  ), [annotations, dataset, selectedRoiId, selectedProbePointId, navigationMode, toDisplayCoords, setSelectedProbePointId, setSelectedRoiId, setSelectedProbeGroupId])
 
-  if (polygons.length > 0 || (draftVertices && draftVertices.length > 0)) {
+  if (draftVertices && draftVertices.length > 0) {
     polygonOverlay = (
       <svg
         style={{
@@ -801,7 +947,7 @@ export default function PrimaryDisplay({
         }}
       >
         {/* finished polygons */}
-        {polygons.map((poly, idx) => {
+        {polygons.map((poly) => {
           const pts = poly.vertices
             .map(toDisplayCoords)
             .filter((p): p is DisplayPoint => !!p)
@@ -812,7 +958,7 @@ export default function PrimaryDisplay({
 
           return (
             <polygon
-              key={idx}
+              key={poly.id}
               points={pts}
               fill="rgba(255,0,0,0.12)"
               stroke="red"
@@ -845,15 +991,17 @@ export default function PrimaryDisplay({
               />
             )}
 
-            {/* start vertex handle (click to close) */}
-            <circle
-              cx={draftVertices[0].x}
-              cy={draftVertices[0].y}
-              r={6}
-              fill="white"
-              stroke="red"
-              strokeWidth={2}
-            />
+            {/* start vertex handle (polygon close hint only) */}
+            {selectionMode === 'polygon' && (
+              <circle
+                cx={draftVertices[0].x}
+                cy={draftVertices[0].y}
+                r={6}
+                fill="white"
+                stroke="red"
+                strokeWidth={2}
+              />
+            )}
           </>
         )}
       </svg>

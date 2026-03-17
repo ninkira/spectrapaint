@@ -111,16 +111,20 @@ class DistanceMetrics:
 
     def normalize_spectra(self, spectra, get_w=False, resolution=None):
         # Normalize spectra for further calculations
-        # Dummy implementation for illustration
         k = np.sum(spectra, axis=1, keepdims=True)
-        normalized_spectra = spectra / k
+        # Guard against zero-sum spectra to avoid divide-by-zero and NaNs.
+        safe_k = np.where(np.abs(k) <= np.finfo(float).eps, 1.0, k)
+        normalized_spectra = spectra / safe_k
         if get_w:
-            return k, normalized_spectra
+            return safe_k, normalized_spectra
         return normalized_spectra
 
     def KL(self, p, q, resolution=None):
         # Kullback-Leibler divergence
-        kl_div = np.sum(np.multiply(p, np.log(p / q)), axis=1)
+        eps = np.finfo(float).eps
+        p_safe = np.clip(p, eps, None)
+        q_safe = np.clip(q, eps, None)
+        kl_div = np.sum(np.multiply(p_safe, np.log(p_safe / q_safe)), axis=1)
         return kl_div
 
     def klpd_spectral(self, A, B, mode=2, resolution=None):
@@ -153,10 +157,16 @@ class DistanceMetrics:
 
         # shape = (kA * self.KL(n_A, n_B, resolution=resolution)) + (kB * self.KL(n_B, n_A, resolution=resolution))
 
-        shape = np.multiply(kA.flatten(), self.KL(n_A, n_B, resolution=resolution)) + \
-                np.multiply(kB.flatten(), self.KL(n_B, n_A, resolution=resolution))
+        kA_1d = kA.flatten()
+        kB_1d = kB.flatten()
+        shape = np.multiply(kA_1d, self.KL(n_A, n_B, resolution=resolution)) + \
+                np.multiply(kB_1d, self.KL(n_B, n_A, resolution=resolution))
 
-        energy = np.multiply((kA - kB), (np.log(kA) - np.log(kB)))
+        eps = np.finfo(float).eps
+        kA_safe = np.clip(kA_1d, eps, None)
+        kB_safe = np.clip(kB_1d, eps, None)
+        # Keep 1D shape aligned with `shape` (one score per row).
+        energy = np.multiply((kA_safe - kB_safe), (np.log(kA_safe) - np.log(kB_safe)))
 
         # print("2 KL results",  energy.shape, energy, "example values", )
         if mode == 0:

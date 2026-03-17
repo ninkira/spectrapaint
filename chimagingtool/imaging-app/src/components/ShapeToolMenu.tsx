@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { useApp } from '../state/AppContext'
 import { SquareDashed, Circle, Waypoints } from 'lucide-react'
 
-type ShapeMode = 'rect' | 'ellipse' | 'line'
+type ShapeMode = 'rect' | 'ellipse' | 'polygon' | 'line'
 
 const ICON_COLOR = '#e8edf5' // same as --ink
 
@@ -38,6 +38,9 @@ const ShapeToolMenu: React.FC = () => {
         {currentShape === 'ellipse' && (
           <Circle size={20} color={ICON_COLOR} />
         )}
+        {currentShape === 'polygon' && (
+          <Waypoints size={20} color={ICON_COLOR} />
+        )}
         {currentShape === 'line' && (
           <Waypoints size={20} color={ICON_COLOR} />
         )}
@@ -63,10 +66,18 @@ const ShapeToolMenu: React.FC = () => {
 
           <button
             className="shape-tool-item"
+            onClick={() => handleSelect('polygon')}
+          >
+            <Waypoints size={16} color={ICON_COLOR} />
+            <span>Polygon (area)</span>
+          </button>
+
+          <button
+            className="shape-tool-item"
             onClick={() => handleSelect('line')}
           >
             <Waypoints size={16} color={ICON_COLOR} />
-            <span>Polyline</span>
+            <span>Polyline (edge only)</span>
           </button>
         </div>
       )}

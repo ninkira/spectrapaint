@@ -1,10 +1,14 @@
 import io
+import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from PIL import Image
+from pydantic import BaseModel
+from datetime import datetime, timezone
 
 
 from ..models.dataset_meta import DatasetMeta
@@ -15,6 +19,7 @@ from ..services.image_ops import percent_stretch, png_bytes
 router = APIRouter()
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 PROJECT_ROOT = DATA_ROOT / "old_man"
+ANNOTATIONS_DIR = PROJECT_ROOT / "annotations"
 
 # for loading visualisations created in third-party-software
 SUPPORTED_VISUAL_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
@@ -123,6 +128,18 @@ def _to_relative_project_path(path: str) -> str:
     except ValueError:
         return p.as_posix()
 
+
+def _safe_annotation_file_name(dataset_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", dataset_id) + ".annotations.json"
+
+
+def _annotation_file_path(dataset_id: str) -> Path:
+    return ANNOTATIONS_DIR / _safe_annotation_file_name(dataset_id)
+
+
+class DatasetAnnotationsPayload(BaseModel):
+    annotations: list[dict]
+
 # General calls
 @router.get("/datasets", response_model=list[DatasetMeta])
 def list_datasets():
@@ -216,3 +233,52 @@ def visual(id: str, max_w: int | None = Query(default=None, ge=64, le=8192)):
         raise HTTPException(status_code=400, detail=f"Unsupported visual file type: {visual_path}")
     content = _cached_visual_png_bytes(visual_path, _mtime_ns(visual_path), max_w)
     return Response(content=content, media_type="image/png")
+
+
+@router.get("/datasets/{id}/annotations")
+def get_annotations(id: str):
+    get_dataset_record_or_404(id)
+    file_path = _annotation_file_path(id)
+    if not file_path.exists():
+        return {"dataset_id": id, "annotations": []}
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read annotations: {exc}") from exc
+
+    if isinstance(raw, dict):
+        anns = raw.get("annotations", [])
+        if isinstance(anns, list):
+            return {"dataset_id": id, "annotations": anns}
+    return {"dataset_id": id, "annotations": []}
+
+
+@router.put("/datasets/{id}/annotations")
+def put_annotations(id: str, payload: DatasetAnnotationsPayload):
+    get_dataset_record_or_404(id)
+
+    normalized: list[dict] = []
+    for ann in payload.annotations:
+        if not isinstance(ann, dict):
+            continue
+        item = dict(ann)
+        item["datasetId"] = id
+        normalized.append(item)
+
+    document = {
+        "dataset_id": id,
+        "version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "annotations": normalized,
+    }
+
+    try:
+        ANNOTATIONS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_annotation_file_path(id), "w", encoding="utf-8") as f:
+            json.dump(document, f, ensure_ascii=True, indent=2)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save annotations: {exc}") from exc
+
+    return {"ok": True, "count": len(normalized)}
