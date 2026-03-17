@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from 'r
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
-import type { RectAnn, EllipseAnn, PolygonAnn, LineAnn } from '../models/annotations'
+import type { Annotation, RectAnn, EllipseAnn, PolygonAnn, LineAnn } from '../models/annotations'
 
 interface PrimaryDisplayProps {
   onRegionSpectra?: (specs: Spectrum[]) => void // optional
@@ -13,7 +13,22 @@ interface PrimaryDisplayProps {
 type DisplayPoint = { x: number; y: number } /* Image Render Coord */
 type ImagePoint = { x: number; y: number } /* Actual HSI Coors */
 
-type Polygon = { vertices: ImagePoint[] }
+const polygonArea = (vertices: { x: number; y: number }[]): number => {
+  if (!vertices.length) return 0
+  let sum = 0
+  for (let i = 0; i < vertices.length; i += 1) {
+    const j = (i + 1) % vertices.length
+    sum += vertices[i].x * vertices[j].y - vertices[j].x * vertices[i].y
+  }
+  return Math.abs(sum) * 0.5
+}
+
+const annotationArea = (ann: Annotation): number => {
+  if (ann.type === 'rect') return Math.max(0, ann.geometry.w) * Math.max(0, ann.geometry.h)
+  if (ann.type === 'ellipse') return Math.PI * Math.max(0, ann.geometry.rx) * Math.max(0, ann.geometry.ry)
+  if (ann.type === 'polygon') return polygonArea(ann.geometry.vertices)
+  return 0
+}
 
 
 export default function PrimaryDisplay({
@@ -50,8 +65,6 @@ export default function PrimaryDisplay({
   /* Circle/Retangle Selection */
   const [dragStart, setDragStart] = useState<DisplayPoint | null>(null)
   const [dragCurrent, setDragCurrent] = useState<DisplayPoint | null>(null)
-
-  const [polygons, setPolygons] = useState<Polygon[]>([]) /* if lines are connected */
 
   // Draft polyline vertices while drawing (Display space)
   const [draftVertices, setDraftVertices] = useState<DisplayPoint[] | null>(null)
@@ -123,8 +136,6 @@ export default function PrimaryDisplay({
       if (!iv) return
       imgVerts.push(iv)
     }
-
-    setPolygons((prev) => [...prev, { vertices: imgVerts }])
 
     const ann: PolygonAnn = {
       id: crypto.randomUUID(),
@@ -749,8 +760,13 @@ export default function PrimaryDisplay({
         const INACTIVE_FILL = 'rgba(227,181,5,0.12)'
         const selectedId = selectedRoiId ?? selectedProbePointId
 
-        return annotations
-          .filter(a => dataset && a.datasetId === dataset.id)
+        const drawOrderedAnnotations = annotations
+          .filter((a) => dataset && a.datasetId === dataset.id)
+          .slice()
+          // Draw large ROIs first so smaller ROIs remain clickable on top.
+          .sort((a, b) => annotationArea(b) - annotationArea(a))
+
+        return drawOrderedAnnotations
           .map(a => {
             const isSelected = a.id === selectedId
             const stroke = isSelected ? SELECTED_STROKE : INACTIVE_STROKE
@@ -899,7 +915,7 @@ export default function PrimaryDisplay({
     </svg>
   )
 
-  if (polygons.length > 0 || (draftVertices && draftVertices.length > 0)) {
+  if (draftVertices && draftVertices.length > 0) {
     polygonOverlay = (
       <svg
         style={{
@@ -912,27 +928,6 @@ export default function PrimaryDisplay({
           pointerEvents: 'none',
         }}
       >
-        {/* finished polygons */}
-        {polygons.map((poly, idx) => {
-          const pts = poly.vertices
-            .map(toDisplayCoords)
-            .filter((p): p is DisplayPoint => !!p)
-            .map((p) => `${p.x},${p.y}`)
-            .join(' ')
-
-          if (!pts) return null
-
-          return (
-            <polygon
-              key={idx}
-              points={pts}
-              fill="rgba(255,0,0,0.12)"
-              stroke="red"
-              strokeWidth={2}
-            />
-          )
-        })}
-
         {/* draft polyline (in-progress) */}
         {draftVertices && draftVertices.length > 0 && (
           <>

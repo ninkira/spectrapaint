@@ -111,7 +111,7 @@ export default function WorkArea() {
       isMultiPixelMode
         ? 'Multiple spectra (selected pixels)'
         : isRegionMode
-          ? 'Region spectra (rectangle / ellipse)'
+          ? 'Region spectra (rectangle / ellipse / polygon)'
           : 'Selected spectra'
 
     plot = <SpectrumPlot spectra={selectedSpectra} title={title} />

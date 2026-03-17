@@ -23,6 +23,13 @@ type TopMatch = {
   values: number[]
 }
 
+const getTopMatchDisplayName = (m: TopMatch): string => {
+  const label = (m.label_name ?? '').trim()
+  const raw = (m.pigment_name ?? '').trim()
+  if (label && label.toLowerCase() !== raw.toLowerCase()) return label
+  return (m.spectra_name_prefix ?? m.pigment_name).trim()
+}
+
 const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
   isOpen,
   title,
@@ -142,7 +149,7 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
   }
 
   const comparisonSpectra = topMatches.map((m) => ({
-    name: `${m.rank}. ${m.label_name ?? m.pigment_name}`,
+    name: `${m.rank}. ${getTopMatchDisplayName(m)}`,
     values: m.values,
     wavelengths_nm: libraryWavelengths.length ? libraryWavelengths : undefined,
   }))
@@ -225,7 +232,7 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
               <ol style={{ margin: 0, paddingLeft: '1.1rem' }}>
                 {topMatches.slice(0, 3).map((m) => (
                   <li key={`${m.rank}-${m.pigment_name}`} style={{ marginBottom: '0.4rem' }}>
-                    <strong>{(m.label_name && m.label_name.trim()) || m.pigment_name}</strong>
+                    <strong>{getTopMatchDisplayName(m)}</strong>
                     {` (${m.spectra_name_prefix ?? m.pigment_name}) - similarity score ${m.score.toFixed(4)}`}
                   </li>
                 ))}

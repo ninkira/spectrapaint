@@ -56,6 +56,102 @@ def _norm_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
 
 
+def _norm_header(value: object) -> str:
+    return _norm_token(str(value))
+
+
+def _find_name_columns(columns: list[object]) -> tuple[int | None, int | None]:
+    prefix_idx = None
+    pname_idx = None
+    for i, col in enumerate(columns):
+        key = _norm_header(col)
+        if key == "spectranameprefix":
+            prefix_idx = i
+        if key in {"pigmentnamepname", "pigmentname"}:
+            pname_idx = i
+    return prefix_idx, pname_idx
+
+
+def _rows_from_excel(candidate: Path) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+
+    # First try pandas (handles many edge cases cleanly when available).
+    try:
+        import pandas as pd  # type: ignore
+
+        engines: list[str | None]
+        if candidate.suffix.lower() == ".xls":
+            engines = ["xlrd", None]
+        else:
+            engines = ["openpyxl", None]
+
+        for engine in engines:
+            try:
+                df = pd.read_excel(str(candidate), engine=engine) if engine else pd.read_excel(str(candidate))
+            except Exception:
+                continue
+
+            cols = [str(c).strip() for c in df.columns]
+            prefix_idx, pname_idx = _find_name_columns(cols)
+            if prefix_idx is None or pname_idx is None:
+                continue
+
+            prefix_col = cols[prefix_idx]
+            pname_col = cols[pname_idx]
+            for _, rec in df[[prefix_col, pname_col]].iterrows():
+                prefix_val = str(rec[prefix_col]).strip()
+                pname_val = str(rec[pname_col]).strip()
+                if prefix_val:
+                    rows.append((prefix_val, pname_val))
+            if rows:
+                return rows
+    except Exception:
+        pass
+
+    # Pandas unavailable/failed: fallback to direct readers.
+    suffix = candidate.suffix.lower()
+    if suffix == ".xls":
+        try:
+            import xlrd  # type: ignore
+
+            wb = xlrd.open_workbook(str(candidate))
+            sh = wb.sheet_by_index(0)
+            if sh.nrows <= 1:
+                return rows
+            headers = [sh.cell_value(0, c) for c in range(sh.ncols)]
+            prefix_idx, pname_idx = _find_name_columns(headers)
+            if prefix_idx is None or pname_idx is None:
+                return rows
+            for r in range(1, sh.nrows):
+                prefix_val = str(sh.cell_value(r, prefix_idx)).strip()
+                pname_val = str(sh.cell_value(r, pname_idx)).strip()
+                if prefix_val:
+                    rows.append((prefix_val, pname_val))
+        except Exception:
+            return rows
+    elif suffix == ".xlsx":
+        try:
+            from openpyxl import load_workbook  # type: ignore
+
+            wb = load_workbook(filename=str(candidate), read_only=True, data_only=True)
+            ws = wb.active
+            it = ws.iter_rows(values_only=True)
+            header_row = next(it, None)
+            if not header_row:
+                return rows
+            prefix_idx, pname_idx = _find_name_columns(list(header_row))
+            if prefix_idx is None or pname_idx is None:
+                return rows
+            for row in it:
+                prefix_val = str(row[prefix_idx] if prefix_idx < len(row) else "").strip()
+                pname_val = str(row[pname_idx] if pname_idx < len(row) else "").strip()
+                if prefix_val:
+                    rows.append((prefix_val, pname_val))
+        except Exception:
+            return rows
+    return rows
+
+
 def _resolve_label_for_match(
     library_dir: str,
     pigment_name: str,
@@ -83,39 +179,18 @@ def _resolve_label_for_match(
     label_name = pigment_name
     key_norm = _norm_token(_strip_spectrum_suffix(str(pigment_name).strip()))
 
-    try:
-        import pandas as pd
-    except Exception:
-        return {"label_name": label_name}
-
     for candidate in excel_candidates:
         if not candidate.exists():
             continue
-        try:
-            engine = "xlrd" if candidate.suffix.lower() == ".xls" else "openpyxl"
-            df = pd.read_excel(str(candidate), engine=engine)
-        except Exception:
-            continue
-
-        df.columns = [str(c).strip() for c in df.columns]
-        if "Spectra name prefix" not in df.columns or "Pigment name (pname)" not in df.columns:
-            continue
-
-        prefix_norm = (
-            df["Spectra name prefix"]
-            .astype(str)
-            .str.strip()
-            .map(_strip_spectrum_suffix)
-            .map(_norm_token)
-        )
-        match = df[prefix_norm == key_norm]
-        if match.empty:
-            continue
-
-        pname = str(match.iloc[0]["Pigment name (pname)"]).strip()
-        if pname:
-            label_name = pname
-        break
+        for spectra_prefix, pname in _rows_from_excel(candidate):
+            prefix_norm = _norm_token(_strip_spectrum_suffix(spectra_prefix))
+            if not prefix_norm:
+                continue
+            if key_norm == prefix_norm or key_norm.startswith(prefix_norm) or prefix_norm.startswith(key_norm):
+                clean_pname = str(pname).strip()
+                if clean_pname:
+                    label_name = clean_pname
+                return {"label_name": label_name}
 
     return {"label_name": label_name}
 
