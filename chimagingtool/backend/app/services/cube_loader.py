@@ -1,6 +1,8 @@
+from functools import lru_cache
+
 from spectral import io as spyio
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 def open_envi(hdr_path: str):
     return spyio.envi.open(hdr_path)
@@ -16,6 +18,15 @@ def read_metadata(img) -> Dict[str, Any]:
 
 def load_cube(img):
     return np.asarray(img.load())   # (H, W, B) memmap-like
+
+
+@lru_cache(maxsize=4)
+def get_cube(hdr_path: str) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Open ENVI, read metadata, load cube — cached by HDR path."""
+    img = open_envi(hdr_path)
+    md = read_metadata(img)
+    cube = np.asarray(img.load())
+    return cube, md
 
 def nearest_band_idx(wl, nm): return int(np.abs(wl - nm).argmin())
 

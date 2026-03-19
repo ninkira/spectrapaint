@@ -1,5 +1,7 @@
 ﻿import logging
+import os
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -152,6 +154,13 @@ def _rows_from_excel(candidate: Path) -> list[tuple[str, str]]:
     return rows
 
 
+@lru_cache(maxsize=16)
+def _rows_from_excel_cached(path: str, mtime_ns: int) -> tuple[tuple[str, str], ...]:
+    """Cached wrapper — returns immutable tuple so lru_cache works."""
+    del mtime_ns  # part of cache key for invalidation
+    return tuple(_rows_from_excel(Path(path)))
+
+
 def _resolve_label_for_match(
     library_dir: str,
     pigment_name: str,
@@ -182,7 +191,11 @@ def _resolve_label_for_match(
     for candidate in excel_candidates:
         if not candidate.exists():
             continue
-        for spectra_prefix, pname in _rows_from_excel(candidate):
+        try:
+            mtime_ns = os.stat(str(candidate)).st_mtime_ns
+        except OSError:
+            continue
+        for spectra_prefix, pname in _rows_from_excel_cached(str(candidate), mtime_ns):
             prefix_norm = _norm_token(_strip_spectrum_suffix(spectra_prefix))
             if not prefix_norm:
                 continue
@@ -209,9 +222,23 @@ def _parse_spectra_names(raw: object, count: int) -> list[str]:
     return names
 
 
+_library_cache: dict[tuple[str, str], tuple[np.ndarray, list[str], list[float]]] = {}
+_library_cache_mtimes: dict[tuple[str, str], float] = {}
+
+
 def _load_library_matrix(reference_library: dict) -> tuple[np.ndarray, list[str], list[float]]:
     hdr_path = reference_library["hdr_path"]
     data_path = reference_library["data_path"]
+    cache_key = (hdr_path, data_path)
+
+    try:
+        current_mtime = os.stat(hdr_path).st_mtime
+    except OSError:
+        current_mtime = 0.0
+
+    if cache_key in _library_cache and _library_cache_mtimes.get(cache_key) == current_mtime:
+        return _library_cache[cache_key]
+
     img = spyio.envi.open(hdr_path, data_path)
     if hasattr(img, "spectra"):
         arr = np.asarray(img.spectra, dtype=float)
@@ -242,7 +269,10 @@ def _load_library_matrix(reference_library: dict) -> tuple[np.ndarray, list[str]
             wavelengths = []
             break
 
-    return arr, names, wavelengths
+    result = (arr, names, wavelengths)
+    _library_cache[cache_key] = result
+    _library_cache_mtimes[cache_key] = current_mtime
+    return result
 
 
 def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.ndarray) -> np.ndarray:
