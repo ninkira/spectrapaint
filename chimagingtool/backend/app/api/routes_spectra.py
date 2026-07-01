@@ -1,9 +1,11 @@
 from typing import List, Literal, Optional
 
+import numpy as np
 from fastapi import APIRouter, HTTPException
+from matplotlib.path import Path as MplPath
 from pydantic import BaseModel
 
-from ..services.cube_loader import load_cube, open_envi, read_metadata
+from ..services.cube_loader import get_cube_for_path
 from ..services.dataset_store import get_dataset_record_or_404
 from ..services.spectra_region import compute_region_stats, extract_region_signals
 
@@ -14,9 +16,7 @@ router = APIRouter()
 @router.get("/datasets/{id}/spectra")
 def spectra_at_pixel(id: str, x: int, y: int):
     rec = get_dataset_record_or_404(id)
-    img = open_envi(rec["envi_hdr"])
-    md = read_metadata(img)
-    cube = load_cube(img)
+    cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
     if not (0 <= x < w and 0 <= y < h):
@@ -41,9 +41,7 @@ def spectra_region(
     y1: int,
 ):
     rec = get_dataset_record_or_404(id)
-    img = open_envi(rec["envi_hdr"])
-    md = read_metadata(img)
-    cube = load_cube(img)
+    cube, md = get_cube_for_path(rec["envi_hdr"])
 
     spectra_out = extract_region_signals(cube, shape, x0, y0, x1, y1)
     stats = compute_region_stats(spectra_out)
@@ -93,9 +91,7 @@ def spectra_line(
     step: int = 1,
 ):
     rec = get_dataset_record_or_404(id)
-    img = open_envi(rec["envi_hdr"])
-    md = read_metadata(img)
-    cube = load_cube(img)
+    cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
     x0c = max(0, min(w - 1, x0))
@@ -128,20 +124,6 @@ class PolygonRequest(BaseModel):
     max_points: Optional[int] = None
 
 
-def point_in_poly(x: int, y: int, verts: List[Point]) -> bool:
-    inside = False
-    n = len(verts)
-    j = n - 1
-    for i in range(n):
-        xi, yi = verts[i].x, verts[i].y
-        xj, yj = verts[j].x, verts[j].y
-        intersects = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi)
-        if intersects:
-            inside = not inside
-        j = i
-    return inside
-
-
 @router.post("/datasets/{id}/spectra-polygon")
 def spectra_polygon(id: str, req: PolygonRequest):
     rec = get_dataset_record_or_404(id)
@@ -149,9 +131,7 @@ def spectra_polygon(id: str, req: PolygonRequest):
     if not req.vertices or len(req.vertices) < 3:
         raise HTTPException(400, "Polygon needs at least 3 vertices")
 
-    img = open_envi(rec["envi_hdr"])
-    md = read_metadata(img)
-    cube = load_cube(img)
+    cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
     verts = [Point(x=max(0, min(w - 1, v.x)), y=max(0, min(h - 1, v.y))) for v in req.vertices]
@@ -163,22 +143,34 @@ def spectra_polygon(id: str, req: PolygonRequest):
     y_min = max(0, min(ys))
     y_max = min(h - 1, max(ys))
 
+    # Vectorized point-in-polygon using matplotlib
+    poly_path = MplPath([(v.x, v.y) for v in verts])
+    ys_grid, xs_grid = np.mgrid[y_min:y_max + 1, x_min:x_max + 1]
+    points = np.column_stack([xs_grid.ravel(), ys_grid.ravel()])
+    mask = poly_path.contains_points(points).reshape(ys_grid.shape)
+
+    inside_ys, inside_xs = np.where(mask)
+    inside_ys += y_min
+    inside_xs += x_min
+
     wl = md["wavelengths_nm"]
-    spectra_out = []
-
-    count = 0
     max_points = req.max_points
+    total = len(inside_ys)
+    truncated = max_points is not None and total > max_points
+    if truncated:
+        inside_ys = inside_ys[:max_points]
+        inside_xs = inside_xs[:max_points]
 
-    for y in range(y_min, y_max + 1):
-        for x in range(x_min, x_max + 1):
-            if not point_in_poly(x, y, verts):
-                continue
+    # Fancy indexing: extract all spectra in one NumPy call instead of a Python loop
+    spectra_arr = cube[inside_ys, inside_xs, :].astype(np.float32)  # (N, B)
+    values_list = spectra_arr.tolist()
+    xs_list = inside_xs.tolist()
+    ys_list = inside_ys.tolist()
 
-            spec = cube[y, x, :].astype(float)
-            spectra_out.append({"x": x, "y": y, "wavelengths_nm": wl, "values": spec.tolist()})
+    spectra_out = [
+        {"x": xs_list[i], "y": ys_list[i], "values": values_list[i]}
+        for i in range(len(xs_list))
+    ]
 
-            count += 1
-            if max_points is not None and count >= max_points:
-                return {"spectra": spectra_out, "truncated": True, "count": count}
-
-    return {"spectra": spectra_out, "truncated": False, "count": count}
+    # wavelengths_nm at top-level — avoids repeating it N times in the payload
+    return {"spectra": spectra_out, "wavelengths_nm": wl, "truncated": truncated, "count": len(spectra_out)}

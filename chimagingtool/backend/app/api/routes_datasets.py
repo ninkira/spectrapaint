@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 
 from ..models.dataset_meta import DatasetMeta
-from ..services.cube_loader import downsample2, extract_rgb, load_cube, open_envi, read_metadata
+from ..services.cube_loader import downsample2, extract_rgb, get_cube_for_path, open_envi, read_metadata
 from ..services.dataset_store import get_dataset_record_or_404, registry
 from ..services.image_ops import percent_stretch, png_bytes
 
@@ -106,9 +106,7 @@ def _cached_hsi_rgb_bytes(
     stretch: str,
 ) -> bytes:
     del hdr_mtime_ns  # part of cache key for invalidation on file changes
-    img = open_envi(hdr_path)
-    md = read_metadata(img)
-    cube = load_cube(img)
+    cube, md = get_cube_for_path(hdr_path)
     wl = md["wavelengths_nm"]
     rgb = extract_rgb(cube, wl, r, g, b)
     rgb8 = percent_stretch(rgb) if stretch.startswith("percent") else rgb.astype("uint8")
@@ -155,8 +153,7 @@ def list_datasets():
         if hdr:
             if not os.path.exists(hdr):
                 continue
-            img = open_envi(hdr)
-            md = read_metadata(img)
+            md = read_metadata(open_envi(hdr))
             path = _to_relative_project_path(hdr)
             out.append(
                 DatasetMeta(
@@ -205,9 +202,7 @@ def thumbnail(id: str, scale: int = Query(8, ge=1)):
     hdr = rec.get("envi_hdr")
     if not hdr:
         raise HTTPException(status_code=400, detail="Thumbnail endpoint supports HSI datasets only")
-    img = open_envi(hdr)
-    md = read_metadata(img)
-    cube = load_cube(img)
+    cube, md = get_cube_for_path(hdr)
     wl = md["wavelengths_nm"]
     rgb = extract_rgb(cube, wl, 650, 550, 450)
     rgb = downsample2(rgb, scale)

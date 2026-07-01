@@ -131,8 +131,20 @@ def _find_dataset_meta(
     return {}
 
 
+_registry_cache: dict[str, Any] = {}
+_registry_mtime: float = 0.0
+
+
 def registry() -> dict[str, Any]:
-    return _build_auto_registry()
+    global _registry_cache, _registry_mtime
+    try:
+        current_mtime = PROJECT_REGISTRY_FILE.stat().st_mtime
+    except OSError:
+        current_mtime = 0.0
+    if current_mtime != _registry_mtime or not _registry_cache:
+        _registry_cache = _build_auto_registry()
+        _registry_mtime = current_mtime
+    return _registry_cache
 
 
 def get_dataset_record_or_404(dataset_id: str) -> dict[str, Any]:
