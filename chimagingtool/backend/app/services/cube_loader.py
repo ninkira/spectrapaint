@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from spectral import io as spyio
@@ -17,16 +18,21 @@ def read_metadata(img) -> Dict[str, Any]:
     return {"width": img.ncols, "height": img.nrows, "bands": img.nbands, "wavelengths_nm": wl}
 
 def load_cube(img):
-    return np.asarray(img.load())   # (H, W, B) memmap-like
+    return np.asarray(img.load(), dtype=np.float32)   # (H, W, B)
 
 
-@lru_cache(maxsize=4)
-def get_cube(hdr_path: str) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Open ENVI, read metadata, load cube — cached by HDR path."""
+@lru_cache(maxsize=2)
+def get_cube(hdr_path: str, _mtime_ns: int = 0) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Open ENVI, read metadata, load cube — cached by HDR path + mtime."""
     img = open_envi(hdr_path)
     md = read_metadata(img)
-    cube = np.asarray(img.load())
+    cube = np.asarray(img.load(), dtype=np.float32)
     return cube, md
+
+
+def get_cube_for_path(hdr_path: str) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Load cube with automatic mtime-based cache invalidation."""
+    return get_cube(hdr_path, os.stat(hdr_path).st_mtime_ns)
 
 def nearest_band_idx(wl, nm): return int(np.abs(wl - nm).argmin())
 

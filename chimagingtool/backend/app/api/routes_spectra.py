@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from matplotlib.path import Path as MplPath
 from pydantic import BaseModel
 
-from ..services.cube_loader import get_cube, load_cube, open_envi, read_metadata
+from ..services.cube_loader import get_cube_for_path
 from ..services.dataset_store import get_dataset_record_or_404
 from ..services.spectra_region import compute_region_stats, extract_region_signals
 
@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/datasets/{id}/spectra")
 def spectra_at_pixel(id: str, x: int, y: int):
     rec = get_dataset_record_or_404(id)
-    cube, md = get_cube(rec["envi_hdr"])
+    cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
     if not (0 <= x < w and 0 <= y < h):
@@ -41,7 +41,7 @@ def spectra_region(
     y1: int,
 ):
     rec = get_dataset_record_or_404(id)
-    cube, md = get_cube(rec["envi_hdr"])
+    cube, md = get_cube_for_path(rec["envi_hdr"])
 
     spectra_out = extract_region_signals(cube, shape, x0, y0, x1, y1)
     stats = compute_region_stats(spectra_out)
@@ -91,7 +91,7 @@ def spectra_line(
     step: int = 1,
 ):
     rec = get_dataset_record_or_404(id)
-    cube, md = get_cube(rec["envi_hdr"])
+    cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
     x0c = max(0, min(w - 1, x0))
@@ -131,7 +131,7 @@ def spectra_polygon(id: str, req: PolygonRequest):
     if not req.vertices or len(req.vertices) < 3:
         raise HTTPException(400, "Polygon needs at least 3 vertices")
 
-    cube, md = get_cube(rec["envi_hdr"])
+    cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
     verts = [Point(x=max(0, min(w - 1, v.x)), y=max(0, min(h - 1, v.y))) for v in req.vertices]
@@ -161,9 +161,16 @@ def spectra_polygon(id: str, req: PolygonRequest):
         inside_ys = inside_ys[:max_points]
         inside_xs = inside_xs[:max_points]
 
-    spectra_out = []
-    for y_px, x_px in zip(inside_ys, inside_xs):
-        spec = cube[int(y_px), int(x_px), :].astype(float)
-        spectra_out.append({"x": int(x_px), "y": int(y_px), "wavelengths_nm": wl, "values": spec.tolist()})
+    # Fancy indexing: extract all spectra in one NumPy call instead of a Python loop
+    spectra_arr = cube[inside_ys, inside_xs, :].astype(np.float32)  # (N, B)
+    values_list = spectra_arr.tolist()
+    xs_list = inside_xs.tolist()
+    ys_list = inside_ys.tolist()
 
-    return {"spectra": spectra_out, "truncated": truncated, "count": len(spectra_out)}
+    spectra_out = [
+        {"x": xs_list[i], "y": ys_list[i], "values": values_list[i]}
+        for i in range(len(xs_list))
+    ]
+
+    # wavelengths_nm at top-level — avoids repeating it N times in the payload
+    return {"spectra": spectra_out, "wavelengths_nm": wl, "truncated": truncated, "count": len(spectra_out)}

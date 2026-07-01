@@ -116,9 +116,9 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
   }, [normalizeSignals, usedStats])
 
   const displayedStats = normalizedStatsFromSignals ?? scaledBackendStats
-  if (!wl.length || !displayedStats) return <div style={{ padding: '1rem' }}>No spectra available.</div>
 
   const data: Data[] = useMemo(() => {
+    if (!wl.length || !displayedStats) return []
     const d: Data[] = []
 
     if (showSignals) {
@@ -188,10 +188,12 @@ const SpectrumPlot: React.FC<SpectrumPlotProps> = ({
       title: { text: 'Wavelength (nm)' },
       tickmode: 'linear',
       dtick: 100,
-      tick0: Math.ceil(wl[0] / 100) * 100,
+      tick0: wl.length ? Math.ceil(wl[0] / 100) * 100 : 0,
     },
     yaxis: { title: { text: normalizeSignals ? 'Normalized intensity (0-1)' : 'Intensity / Reflectance' } },
   }), [title, wl, normalizeSignals])
+
+  if (!wl.length || !displayedStats) return <div style={{ padding: '1rem' }}>No spectra available.</div>
 
   return (
     <div>

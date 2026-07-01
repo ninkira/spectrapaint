@@ -72,6 +72,7 @@ export default function PrimaryDisplay({
   const [draftVertices, setDraftVertices] = useState<DisplayPoint[] | null>(null)
   // Current mouse position for preview edge (Display space)
   const [draftHover, setDraftHover] = useState<DisplayPoint | null>(null)
+  const [polygons, setPolygons] = useState<Polygon[]>([])
 
   const [probeGroupId, setProbeGroupId] = useState<string | null>(null)
   const rafId = useRef(0)
@@ -174,25 +175,26 @@ export default function PrimaryDisplay({
     }
 
     void (async () => {
-      const data = await fetchSpectraInPolygon(imgVerts /*, 20000 optional */)
+      const data = await fetchSpectraInPolygon(imgVerts, 20000)
 
       if (!data?.spectra) return
 
-
+      // Attach top-level wavelengths_nm to each spectrum (avoids N copies in payload)
+      const wl = data.wavelengths_nm ?? []
+      const spectra = data.spectra.map((s) => ({ ...s, wavelengths_nm: wl }))
 
       // keep callback (optional)
-      onRegionSpectra?.(data.spectra)
+      onRegionSpectra?.(spectra)
 
       // IMPORTANT: add to global selection so Plotly updates (same as other modes)
-      for (const s of data.spectra) {
+      for (const s of spectra) {
         if (s) addSpectrum(s)
-
       }
 
 
 
 
-      setRoiSpectraForId(ann.id, data.spectra)
+      setRoiSpectraForId(ann.id, spectra)
       setSelectedRoiId(ann.id)
 
     })()
@@ -337,7 +339,8 @@ export default function PrimaryDisplay({
     }
 
     return (await res.json()) as {
-      spectra: Spectrum[]
+      spectra: Array<{ x: number; y: number; values: number[] }>
+      wavelengths_nm: number[]
       truncated?: boolean
       count?: number
     }
