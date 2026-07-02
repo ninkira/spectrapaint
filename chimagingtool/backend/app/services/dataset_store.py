@@ -5,8 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from ..paths import APP_DATA_DIR as DATA_DIR
 PROJECT_ID = "old_man"
 PROJECT_DIR = DATA_DIR / PROJECT_ID
 PROJECT_REGISTRY_FILE = PROJECT_DIR / "registry.json"

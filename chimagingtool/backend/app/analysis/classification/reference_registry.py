@@ -2,8 +2,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-
-DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
+from ...paths import APP_DATA_DIR as DATA_ROOT
 LIBRARIES_ROOTS = [
     DATA_ROOT / "old_man" / "spectral_libraries",
     DATA_ROOT / "spectral_libraries",

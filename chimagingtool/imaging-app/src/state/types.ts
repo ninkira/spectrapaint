@@ -3,5 +3,5 @@ export type Layer = {
   name: string
   on: boolean
   path?: string
-  type?: 'hsi' | 'tiff' | 'png'
+  type?: 'hsi' | 'tiff' | 'png' | 'jpg'
 }

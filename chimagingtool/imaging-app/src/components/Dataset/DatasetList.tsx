@@ -14,7 +14,7 @@ interface DatasetListProps {
   apiBaseUrl?: string // optional to override base URL
 }
 
-const DatasetList: React.FC<DatasetListProps> = ({ apiBaseUrl = 'http://localhost:8000' }) => {
+const DatasetList: React.FC<DatasetListProps> = ({ apiBaseUrl = '/api' }) => {
   const [datasets, setDatasets] = useState<DatasetMeta[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

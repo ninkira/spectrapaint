@@ -10,9 +10,7 @@ import {
   ZoomIn,
   ZoomOut,
   RefreshCw,
-  SquareDashed,
   MapPinPlus,
-  WaypointsIcon,
 } from "lucide-react";
 
 import { useApp } from "../state/AppContext";

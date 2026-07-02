@@ -15,7 +15,7 @@ interface DatasetInfoProps {
   apiBaseUrl?: string
 }
 
-const DatasetInfo: React.FC<DatasetInfoProps> = ({ apiBaseUrl = 'http://localhost:8000' }) => {
+const DatasetInfo: React.FC<DatasetInfoProps> = ({ apiBaseUrl = '/api' }) => {
   const [datasets, setDatasets] = useState<DatasetMeta[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

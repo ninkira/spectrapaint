@@ -16,6 +16,7 @@ from ..analysis.classification.reference_registry import (
     list_reference_libraries,
 )
 from ..services.dataset_store import get_dataset_record_or_404
+from ..paths import APP_DATA_DIR
 
 
 router = APIRouter()
@@ -178,7 +179,7 @@ def _resolve_label_for_match(
             excel_candidates.append(p)
 
     # Project-level fallback for shared metadata file(s).
-    shared_root = Path(__file__).resolve().parent.parent / "data" / "old_man" / "spectral_libraries"
+    shared_root = APP_DATA_DIR / "old_man" / "spectral_libraries"
     if shared_root.exists():
         for pattern in ("**/__pigmentlistZenodo_custom.xls", "**/__pigmentlistZenodo_custom.xlsx", "**/__pigmentlistZenodo.xls", "**/__pigmentlistZenodo.xlsx"):
             for p in sorted(shared_root.glob(pattern)):
