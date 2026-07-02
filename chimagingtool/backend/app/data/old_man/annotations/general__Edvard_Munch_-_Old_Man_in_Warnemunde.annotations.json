@@ -1,0 +1,101 @@
+{
+  "dataset_id": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+  "version": 1,
+  "updated_at": "2026-02-24T09:06:17.897217+00:00",
+  "annotations": [
+    {
+      "id": "c9cb6730-6950-4d1f-bc8b-1b8e1c7d0d16",
+      "datasetId": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+      "kind": "probe",
+      "type": "point",
+      "createdAt": "2026-02-24T08:54:40.275Z",
+      "geometry": {
+        "x": 80,
+        "y": 97
+      },
+      "label": "Probe (multi)",
+      "groupId": "45ec4725-5d37-4e28-904d-7e7a006d77ac"
+    },
+    {
+      "id": "12ba17ad-ef0d-4be5-8135-45b5ba70baf0",
+      "datasetId": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+      "kind": "probe",
+      "type": "point",
+      "createdAt": "2026-02-24T08:54:44.395Z",
+      "geometry": {
+        "x": 117,
+        "y": 125
+      },
+      "label": "Probe (multi)",
+      "groupId": "45ec4725-5d37-4e28-904d-7e7a006d77ac"
+    },
+    {
+      "id": "b0472610-4b9d-4f9e-ac90-88cf99105ced",
+      "datasetId": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+      "kind": "probe",
+      "type": "point",
+      "createdAt": "2026-02-24T08:54:46.698Z",
+      "geometry": {
+        "x": 69,
+        "y": 156
+      },
+      "label": "Probe (multi)",
+      "groupId": "45ec4725-5d37-4e28-904d-7e7a006d77ac"
+    },
+    {
+      "id": "237aa10a-942d-4568-b024-402c7f817560",
+      "datasetId": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+      "kind": "probe",
+      "type": "point",
+      "createdAt": "2026-02-24T08:54:49.083Z",
+      "geometry": {
+        "x": 183,
+        "y": 347
+      },
+      "label": "Probe (multi)",
+      "groupId": "45ec4725-5d37-4e28-904d-7e7a006d77ac"
+    },
+    {
+      "id": "7e856efc-b842-446a-9e24-53ffb3ca41c7",
+      "datasetId": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+      "kind": "probe",
+      "type": "point",
+      "createdAt": "2026-02-24T08:54:51.095Z",
+      "geometry": {
+        "x": 58,
+        "y": 693
+      },
+      "label": "Probe (multi)",
+      "groupId": "45ec4725-5d37-4e28-904d-7e7a006d77ac"
+    },
+    {
+      "id": "ff54b339-836c-4b88-b810-92ff73dd815c",
+      "datasetId": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+      "kind": "probe",
+      "type": "point",
+      "createdAt": "2026-02-24T08:54:52.787Z",
+      "geometry": {
+        "x": 655,
+        "y": 948
+      },
+      "label": "Probe (multi)",
+      "groupId": "45ec4725-5d37-4e28-904d-7e7a006d77ac"
+    },
+    {
+      "id": "692f4f93-40bf-41cf-83fb-13c0e87e3861",
+      "datasetId": "general__Edvard_Munch_-_Old_Man_in_Warnemunde",
+      "kind": "probe",
+      "type": "point",
+      "createdAt": "2026-02-24T08:54:57.276Z",
+      "geometry": {
+        "x": 709,
+        "y": 423
+      },
+      "label": "Point Annotation - darkened blue area",
+      "groupId": "45ec4725-5d37-4e28-904d-7e7a006d77ac",
+      "title": "Point Annotation - darkened blue area",
+      "description": "Area analysed in Deborah et al. 2017 using Kullback-Leibler pseudo-divergence (KLPD) and Kremer + ENST pigment libraries",
+      "updatedAt": "2026-02-24T09:06:09.644Z"
+    }
+  ]
+}

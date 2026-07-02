@@ -1,0 +1,26 @@
+# Lean RUNTIME dependencies — only what the app imports when actually serving requests.
+# This is what PyInstaller bundles and what CI installs to build the app (see docs/packaging-guide.md).
+# The full requirements.txt is a dev/experiment mega-dump (torch, jupyter, sphinx, ...) and must
+# NOT be used for packaging. Pin exact versions from `pip freeze` before a release if you want
+# fully reproducible builds.
+
+# --- Web framework ---
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+
+# --- Imaging / numeric ---
+numpy
+pillow
+matplotlib          # only matplotlib.path is used (polygon hit-testing)
+spectral            # ENVI / HSI cube reading
+# pandas            # OPTIONAL: lazily imported by one classification endpoint; not currently installed
+
+# --- Desktop packaging ---
+platformdirs        # per-user writable data dir (SQLite lives here)
+pywebview           # native desktop window wrapper
+
+# --- Database (add when you implement the DB — see docs/database-tutorial.md) ---
+# SQLAlchemy
+# alembic

@@ -1,5 +1,5 @@
 // PrimaryDisplay.tsx
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type MouseEvent, type WheelEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
@@ -47,7 +47,6 @@ export default function PrimaryDisplay({
     selectedRoiId,
     setRoiSpectraForId,
     setSelectedRoiId,
-    selectedProbeGroupId,
     selectedProbePointId,
     probeSpectraByGroupId,
     setProbeSpectraForGroup,
@@ -111,17 +110,6 @@ export default function PrimaryDisplay({
     if (verts.length === 0) return false
     const closeRadius = CLOSE_RADIUS_PX / Math.max(0.0001, view.zoom)
     return dist2(pt, verts[0]) <= closeRadius * closeRadius
-  }
-
-  const cancelActiveSelection = () => {
-    // cancel rect/ellipse drag preview
-    setDragStart(null)
-    setDragCurrent(null)
-
-    // cancel line/poly drafting
-    setDraftVertices(null)
-    setDraftHover(null)
-
   }
 
   const addProbePoint = (x: number, y: number) => {
@@ -543,7 +531,7 @@ export default function PrimaryDisplay({
 
 
 
-  const handleMouseUp = async (e: MouseEvent<HTMLDivElement>) => {
+  const handleMouseUp = async (_e: MouseEvent<HTMLDivElement>) => {
     if (navigationMode) {
       panStartRef.current = null
       setIsPanning(false)

@@ -9,7 +9,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',   // FastAPI server
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        // No rewrite: the backend now serves routes under /api directly, so the same
+        // /api/* urls work in dev (proxied) and in the packaged app (same origin).
       },
     },
   },

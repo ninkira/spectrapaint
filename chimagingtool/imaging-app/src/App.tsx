@@ -4,7 +4,6 @@ import { AppProvider, useApp } from './state/AppContext'
 import Toolbar from './components/Toolbar'
 import ProjectNav from './components/ProjectNav'
 import DataManager from './components/LayerManager'
-import PrimaryDisplay from './components/PrimaryDisplay'
 import WorkArea from './components/WorkArea'
 
 

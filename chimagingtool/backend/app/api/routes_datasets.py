@@ -12,12 +12,13 @@ from datetime import datetime, timezone
 
 
 from ..models.dataset_meta import DatasetMeta
+from ..paths import APP_DATA_DIR
 from ..services.cube_loader import downsample2, extract_rgb, get_cube_for_path, open_envi, read_metadata
 from ..services.dataset_store import get_dataset_record_or_404, registry
 from ..services.image_ops import percent_stretch, png_bytes
 
 router = APIRouter()
-DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
+DATA_ROOT = APP_DATA_DIR
 PROJECT_ROOT = DATA_ROOT / "old_man"
 ANNOTATIONS_DIR = PROJECT_ROOT / "annotations"
 

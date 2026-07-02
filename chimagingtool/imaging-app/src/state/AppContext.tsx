@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { listDatasets, rgbUrl, visualUrl } from '../lib/api';
+import { listDatasets, rgbUrl, visualUrl, saveDatasetAnnotations } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
+import type { Layer } from './types'
+import type { Spectrum } from '../components/hsi_tools/SpectrumPlot'
 import { useCallback } from 'react'
 
 
@@ -25,8 +27,8 @@ type Ctx = {
   rgbImgUrl?: string;
 
   // Selection
-  selectionMode: SelectionMode;
-  setSelectionMode: (m: SelectionMode) => void;
+  selectionMode: SelectionMode | null;
+  setSelectionMode: (m: SelectionMode | null) => void;
   navigationMode: boolean
   setNavigationMode: (v: boolean) => void
   showSignalProcessing: boolean
@@ -43,6 +45,8 @@ type Ctx = {
   updateAnnotation: (id: string, patch: Partial<Annotation>) => void
   removeAnnotation: (id: string) => void
   clearProbePointsForDataset: (datasetId: string) => void
+  setAnnotationsForDataset: (datasetId: string, next: Annotation[]) => void
+  saveAnnotationsForDataset: (datasetId: string, next: Annotation[]) => Promise<void>
 
   // selected ROI
   selectedRoiId: string | null
@@ -103,7 +107,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
   }, [])
 
   const updateAnnotation = useCallback((id: string, patch: Partial<Annotation>) => {
-    setAnnotations(prev => prev.map(a => (a.id === id ? { ...a, ...patch, updatedAt: new Date().toISOString() } : a)))
+    setAnnotations(prev => prev.map(a => (a.id === id ? ({ ...a, ...patch, updatedAt: new Date().toISOString() } as Annotation) : a)))
   }, [])
 
   const clearProbePointsForDataset = useCallback((datasetId: string) => {
@@ -112,12 +116,22 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     )
   }, [])
 
+  // Replace every annotation belonging to a dataset (used for bulk edit/delete in WorkArea).
+  const setAnnotationsForDataset = useCallback((datasetId: string, next: Annotation[]) => {
+    setAnnotations(prev => [...prev.filter(a => a.datasetId !== datasetId), ...next])
+  }, [])
+
+  // Persist a dataset's annotations to the backend.
+  const saveAnnotationsForDataset = useCallback(async (datasetId: string, next: Annotation[]) => {
+    await saveDatasetAnnotations(datasetId, next)
+  }, [])
+
 
   // Select the annotation / ROI
   const toggleLayer = (id: string) => setDatasetId(id)
 
   // new for selection one or multiple pixels in the image
-  const [selectionMode, setSelectionMode] = useState<SelectionMode>('single')
+  const [selectionMode, setSelectionMode] = useState<SelectionMode | null>('single')
   const [navigationMode, setNavigationMode] = useState(false)
   const [showSignalProcessing, setShowSignalProcessing] = useState(false)
   const [primaryWidth, setPrimaryWidth] = useState(600)
@@ -230,6 +244,8 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     updateAnnotation,
     removeAnnotation,
     clearProbePointsForDataset,
+    setAnnotationsForDataset,
+    saveAnnotationsForDataset,
 
     // selected ROI
     selectedRoiId,
@@ -264,6 +280,8 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     annotations,
     updateAnnotation,
     clearProbePointsForDataset,
+    setAnnotationsForDataset,
+    saveAnnotationsForDataset,
     selectedRoiId,
     roiSpectraById,
     setSelectedRoiId,
