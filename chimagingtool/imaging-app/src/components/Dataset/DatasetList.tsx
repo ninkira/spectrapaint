@@ -31,8 +31,8 @@ const DatasetList: React.FC<DatasetListProps> = ({ apiBaseUrl = '/api' }) => {
         }
         const data: DatasetMeta[] = await res.json()
         setDatasets(data)
-      } catch (err: any) {
-        setError(err.message ?? 'Failed to load datasets')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load datasets')
       } finally {
         setLoading(false)
       }

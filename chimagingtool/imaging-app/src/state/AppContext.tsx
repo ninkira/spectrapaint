@@ -74,8 +74,13 @@ type Ctx = {
   setPrimaryWidth: (v: number) => void
 };
 
-const Ctx = createContext<Ctx>(null as any);
-export const useApp = () => useContext(Ctx);
+const Ctx = createContext<Ctx | null>(null);
+// eslint-disable-next-line react-refresh/only-export-components -- hook intentionally co-located with its provider
+export const useApp = () => {
+  const ctx = useContext(Ctx);
+  if (!ctx) throw new Error('useApp must be used within an AppProvider');
+  return ctx;
+};
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
 
