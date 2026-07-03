@@ -10,6 +10,7 @@ export type AnnotationBase = {
   title?: string
   description?: string
   creator?: string
+  motivation?: string[]
   color?: string
   kind: 'probe' | 'roi'
   groupId?: string

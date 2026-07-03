@@ -7,6 +7,25 @@ import SpectrumPlot, { type Spectrum } from './hsi_tools/SpectrumPlot'
 import DatasetInfo from './Dataset/DatasetInfo'
 import PigmentClassificationModal from './hsi_tools/PigmentClassification'
 
+// The 13 standard W3C WADM motivations, plus `analysis` (app-specific: covers
+// classification / analysis operations). Users can also type their own via "Custom…".
+const MOTIVATION_OPTIONS = [
+  'assessing',
+  'bookmarking',
+  'classifying',
+  'commenting',
+  'describing',
+  'editing',
+  'highlighting',
+  'identifying',
+  'linking',
+  'moderating',
+  'questioning',
+  'replying',
+  'tagging',
+  'analysis',
+] as const
+
 export default function WorkArea() {
   const {
     selectionMode,
@@ -30,6 +49,9 @@ export default function WorkArea() {
   const [annotationTitle, setAnnotationTitle] = useState('')
   const [annotationDescription, setAnnotationDescription] = useState('')
   const [annotationCreator, setAnnotationCreator] = useState('')
+  const [annotationMotivations, setAnnotationMotivations] = useState<string[]>([])
+  const [addingCustomMotivation, setAddingCustomMotivation] = useState(false)
+  const [customMotivationText, setCustomMotivationText] = useState('')
 
   const isRegionMode =
     selectionMode === 'rect' || selectionMode === 'ellipse' || selectionMode === 'polygon'
@@ -61,7 +83,27 @@ export default function WorkArea() {
     setAnnotationCreator(
       activeAnnotation?.creator ?? localStorage.getItem('imagingtool.lastCreator') ?? ''
     )
-  }, [activeAnnotationId, activeAnnotation?.title, activeAnnotation?.label, activeAnnotation?.description, activeAnnotation?.creator])
+    const motivation = activeAnnotation?.motivation
+    setAnnotationMotivations(
+      Array.isArray(motivation) ? motivation : motivation ? [motivation] : []
+    )
+    setAddingCustomMotivation(false)
+    setCustomMotivationText('')
+  }, [activeAnnotationId, activeAnnotation?.title, activeAnnotation?.label, activeAnnotation?.description, activeAnnotation?.creator, activeAnnotation?.motivation])
+
+  const addMotivation = (m: string) => {
+    const value = m.trim()
+    if (!value) return
+    setAnnotationMotivations((prev) => (prev.includes(value) ? prev : [...prev, value]))
+  }
+  const removeMotivation = (m: string) => {
+    setAnnotationMotivations((prev) => prev.filter((x) => x !== m))
+  }
+  const commitCustomMotivation = () => {
+    addMotivation(customMotivationText)
+    setCustomMotivationText('')
+    setAddingCustomMotivation(false)
+  }
 
   const saveAnnotationMeta = async () => {
     if (!activeAnnotation || !dataset) return
@@ -80,6 +122,7 @@ export default function WorkArea() {
               label: cleanTitle || a.label,
               description: cleanDescription || undefined,
               creator: cleanCreator || undefined,
+              motivation: annotationMotivations.length ? annotationMotivations : undefined,
               updatedAt: new Date().toISOString(),
             }
             : a
@@ -169,7 +212,16 @@ export default function WorkArea() {
                 style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
                 title="Creator of this annotation"
               >
-                <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>👤</span>
+                <svg
+                  aria-hidden="true"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="#3b82f6"
+                  style={{ flexShrink: 0 }}
+                >
+                  <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.42 0-8 2.24-8 5v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1c0-2.76-3.58-5-8-5Z" />
+                </svg>
                 <input
                   type="text"
                   value={annotationCreator}
@@ -198,7 +250,109 @@ export default function WorkArea() {
                 style={{ padding: '0.5rem', borderRadius: '6px', border: '1px solid #3a465c' }}
               />
             </label>
-            
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              Motivation
+              {annotationMotivations.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                  {annotationMotivations.map((m) => (
+                    <span
+                      key={m}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '999px',
+                        border: '1px solid #3a465c',
+                        background: '#1b2434',
+                        fontSize: '0.8rem',
+                      }}
+                    >
+                      {m}
+                      <button
+                        type="button"
+                        onClick={() => removeMotivation(m)}
+                        title={`Remove ${m}`}
+                        aria-label={`Remove ${m}`}
+                        style={{
+                          display: 'inline-flex',
+                          border: 'none',
+                          background: 'transparent',
+                          color: 'inherit',
+                          cursor: 'pointer',
+                          padding: 0,
+                          lineHeight: 1,
+                          fontSize: '1rem',
+                          opacity: 0.7,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {addingCustomMotivation ? (
+                <div style={{ display: 'flex', gap: '0.25rem' }}>
+                  <input
+                    type="text"
+                    value={customMotivationText}
+                    onChange={(e) => setCustomMotivationText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        commitCustomMotivation()
+                      }
+                    }}
+                    placeholder="Type a motivation, press Enter"
+                    aria-label="Custom motivation"
+                    autoFocus
+                    style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', border: '1px solid #3a465c' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={commitCustomMotivation}
+                    style={{ padding: '0 0.7rem', borderRadius: '6px', border: '1px solid #3a465c', background: 'transparent', color: 'inherit', cursor: 'pointer' }}
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomMotivationText('')
+                      setAddingCustomMotivation(false)
+                    }}
+                    title="Cancel"
+                    aria-label="Cancel"
+                    style={{ padding: '0 0.7rem', borderRadius: '6px', border: '1px solid #3a465c', background: 'transparent', color: 'inherit', cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const value = e.target.value
+                    if (!value) return
+                    if (value === '__custom__') {
+                      setAddingCustomMotivation(true)
+                    } else {
+                      addMotivation(value)
+                    }
+                  }}
+                  style={{ padding: '0.5rem', borderRadius: '6px', border: '1px solid #3a465c' }}
+                >
+                  <option value="">Add motivation…</option>
+                  {MOTIVATION_OPTIONS.filter((m) => !annotationMotivations.includes(m)).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                  <option value="__custom__">Custom…</option>
+                </select>
+              )}
+            </label>
+
             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               Description
               <textarea
