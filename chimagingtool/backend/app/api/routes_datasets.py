@@ -2,15 +2,20 @@ import io
 import json
 import os
 import re
+import uuid
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from PIL import Image
 from pydantic import BaseModel
-from datetime import datetime, timezone
+from sqlalchemy.orm import Session
 
 
+from ..db.database import get_db
+from ..db.ids import stable_id
+from ..db.models import HsiCube, RoiAnnotation
 from ..models.dataset_meta import DatasetMeta
 from ..paths import APP_DATA_DIR
 from ..services.cube_loader import downsample2, extract_rgb, get_cube_for_path, open_envi, read_metadata
@@ -231,50 +236,125 @@ def visual(id: str, max_w: int | None = Query(default=None, ge=64, le=8192)):
     return Response(content=content, media_type="image/png")
 
 
-@router.get("/datasets/{id}/annotations")
-def get_annotations(id: str):
-    get_dataset_record_or_404(id)
-    file_path = _annotation_file_path(id)
+def _load_legacy_annotations(dataset_id: str) -> list[dict]:
+    """Read annotations from the old per-dataset JSON file, if present (used for migration)."""
+    file_path = _annotation_file_path(dataset_id)
     if not file_path.exists():
-        return {"dataset_id": id, "annotations": []}
-
+        return []
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to read annotations: {exc}") from exc
+    except Exception:
+        return []
+    anns = raw.get("annotations") if isinstance(raw, dict) else None
+    return [a for a in anns if isinstance(a, dict)] if isinstance(anns, list) else []
 
-    if isinstance(raw, dict):
-        anns = raw.get("annotations", [])
-        if isinstance(anns, list):
-            return {"dataset_id": id, "annotations": anns}
-    return {"dataset_id": id, "annotations": []}
+
+def _parse_dt(value: object) -> datetime | None:
+    """Parse an ISO-8601 timestamp string into a datetime, tolerating a trailing 'Z'."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _kind_to_motivation(kind: object) -> str:
+    """Map the app's annotation kind to a WADM motivation."""
+    return "identifying" if kind == "probe" else "highlighting"
+
+
+def _geometry_to_svg(ann: dict) -> str:
+    """Render the annotation geometry as an SVG fragment (the WADM SvgSelector value)."""
+    geom = ann.get("geometry") or {}
+    shape = ann.get("type")
+    try:
+        if shape == "rect":
+            return f'<rect x="{geom["x"]}" y="{geom["y"]}" width="{geom["w"]}" height="{geom["h"]}"/>'
+        if shape == "ellipse":
+            return f'<ellipse cx="{geom["cx"]}" cy="{geom["cy"]}" rx="{geom["rx"]}" ry="{geom["ry"]}"/>'
+        if shape == "polygon":
+            pts = " ".join(f'{p["x"]},{p["y"]}' for p in geom.get("vertices", []))
+            return f'<polygon points="{pts}"/>'
+        if shape == "line":
+            pts = " ".join(f'{p["x"]},{p["y"]}' for p in geom.get("points", []))
+            return f'<polyline points="{pts}"/>'
+        if shape == "point":
+            return f'<circle cx="{geom["x"]}" cy="{geom["y"]}" r="1"/>'
+    except (KeyError, TypeError):
+        pass
+    return json.dumps({"type": shape, "geometry": geom})  # fallback: keep it, non-SVG
+
+
+def _build_roi_row(dataset_id: str, ann: dict, cube: "HsiCube | None") -> RoiAnnotation:
+    """Map a frontend annotation object onto the WADM RoiAnnotation columns.
+
+    When the dataset is an HSI cube present in the DB, the annotation is linked to it via the
+    `cube_id` FK and the WADM `target` becomes the cube IRI `urn:uuid:{cube_id}`. The full
+    original object is also stored in `data` so the UI round-trips losslessly (WADM has no slot
+    for structured geometry, colour, group id, etc.).
+    """
+    item = dict(ann)
+    item["datasetId"] = dataset_id
+    try:
+        roi_id = uuid.UUID(str(item.get("id")))
+    except (ValueError, TypeError):
+        roi_id = uuid.uuid4()
+    item["id"] = str(roi_id)
+
+    body = item.get("title") or item.get("label") or item.get("description")
+    now = datetime.now(timezone.utc)
+    cube_id = cube.cube_id if cube is not None else None
+    target = f"urn:uuid:{cube_id}" if cube_id is not None else dataset_id
+    return RoiAnnotation(
+        roi_id=roi_id,
+        selector_type="SvgSelector",
+        selector_value=_geometry_to_svg(item),
+        target=target,
+        dataset_id=dataset_id,
+        cube_id=cube_id,
+        body=body,
+        body_format="text/plain" if body else None,
+        motivation=_kind_to_motivation(item.get("kind")),
+        creator=item.get("creator"),
+        created=_parse_dt(item.get("createdAt")) or now,
+        modified=_parse_dt(item.get("updatedAt")),
+        generator="ImagingTool",
+        generated=now,
+        data=item,
+    )
+
+
+def _replace_dataset_annotations(db: Session, dataset_id: str, annotations: list[dict]) -> int:
+    """Replace all annotations for a dataset with the given list (mirrors old file semantics)."""
+    db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == dataset_id).delete()
+    cube = db.get(HsiCube, stable_id("cube", dataset_id))  # None for non-HSI / unsynced datasets
+    count = 0
+    for ann in annotations:
+        if not isinstance(ann, dict):
+            continue
+        db.add(_build_roi_row(dataset_id, ann, cube))
+        count += 1
+    db.commit()
+    return count
+
+
+@router.get("/datasets/{id}/annotations")
+def get_annotations(id: str, db: Session = Depends(get_db)):
+    get_dataset_record_or_404(id)
+    rows = db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == id).all()
+    if not rows:
+        # One-time migration: import legacy JSON annotations for this dataset, if any exist.
+        legacy = _load_legacy_annotations(id)
+        if legacy:
+            _replace_dataset_annotations(db, id, legacy)
+            rows = db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == id).all()
+    return {"dataset_id": id, "annotations": [r.data for r in rows]}
 
 
 @router.put("/datasets/{id}/annotations")
-def put_annotations(id: str, payload: DatasetAnnotationsPayload):
+def put_annotations(id: str, payload: DatasetAnnotationsPayload, db: Session = Depends(get_db)):
     get_dataset_record_or_404(id)
-
-    normalized: list[dict] = []
-    for ann in payload.annotations:
-        if not isinstance(ann, dict):
-            continue
-        item = dict(ann)
-        item["datasetId"] = id
-        normalized.append(item)
-
-    document = {
-        "dataset_id": id,
-        "version": 1,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "annotations": normalized,
-    }
-
-    try:
-        ANNOTATIONS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_annotation_file_path(id), "w", encoding="utf-8") as f:
-            json.dump(document, f, ensure_ascii=True, indent=2)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save annotations: {exc}") from exc
-
-    return {"ok": True, "count": len(normalized)}
+    count = _replace_dataset_annotations(db, id, payload.annotations)
+    return {"ok": True, "count": count}
