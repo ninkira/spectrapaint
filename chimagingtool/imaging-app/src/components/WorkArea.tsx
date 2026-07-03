@@ -29,6 +29,7 @@ export default function WorkArea() {
   const [isOpen, setIsOpen] = useState(false)
   const [annotationTitle, setAnnotationTitle] = useState('')
   const [annotationDescription, setAnnotationDescription] = useState('')
+  const [annotationCreator, setAnnotationCreator] = useState('')
 
   const isRegionMode =
     selectionMode === 'rect' || selectionMode === 'ellipse' || selectionMode === 'polygon'
@@ -57,13 +58,18 @@ export default function WorkArea() {
   useEffect(() => {
     setAnnotationTitle(activeAnnotation?.title ?? activeAnnotation?.label ?? '')
     setAnnotationDescription(activeAnnotation?.description ?? '')
-  }, [activeAnnotationId, activeAnnotation?.title, activeAnnotation?.label, activeAnnotation?.description])
+    setAnnotationCreator(
+      activeAnnotation?.creator ?? localStorage.getItem('imagingtool.lastCreator') ?? ''
+    )
+  }, [activeAnnotationId, activeAnnotation?.title, activeAnnotation?.label, activeAnnotation?.description, activeAnnotation?.creator])
 
   const saveAnnotationMeta = async () => {
     if (!activeAnnotation || !dataset) return
     try {
       const cleanTitle = annotationTitle.trim()
       const cleanDescription = annotationDescription.trim()
+      const cleanCreator = annotationCreator.trim()
+      if (cleanCreator) localStorage.setItem('imagingtool.lastCreator', cleanCreator)
       const nextForDataset = annotations
         .filter((a) => a.datasetId === dataset.id)
         .map((a) => (
@@ -73,6 +79,7 @@ export default function WorkArea() {
               title: cleanTitle || undefined,
               label: cleanTitle || a.label,
               description: cleanDescription || undefined,
+              creator: cleanCreator || undefined,
               updatedAt: new Date().toISOString(),
             }
             : a
@@ -156,7 +163,31 @@ export default function WorkArea() {
               gap: '0.5rem',
             }}
           >
-            <h3 style={{ margin: 0, fontSize: '0.95rem' }}>Annotation Metadata</h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <h3 style={{ margin: 0, fontSize: '0.95rem' }}>Annotation Metadata</h3>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                title="Creator of this annotation"
+              >
+                <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>👤</span>
+                <input
+                  type="text"
+                  value={annotationCreator}
+                  onChange={(e) => setAnnotationCreator(e.target.value)}
+                  placeholder="Creator"
+                  aria-label="Annotation creator"
+                  style={{
+                    width: '9rem',
+                    padding: '0.25rem 0.5rem',
+                    borderRadius: '6px',
+                    border: '1px solid #3a465c',
+                    background: 'transparent',
+                    color: 'inherit',
+                    fontSize: '0.85rem',
+                  }}
+                />
+              </div>
+            </div>
             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               Title
               <input
@@ -167,6 +198,7 @@ export default function WorkArea() {
                 style={{ padding: '0.5rem', borderRadius: '6px', border: '1px solid #3a465c' }}
               />
             </label>
+            
             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               Description
               <textarea
