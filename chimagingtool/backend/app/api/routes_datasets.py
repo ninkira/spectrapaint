@@ -265,6 +265,25 @@ def _kind_to_motivation(kind: object) -> str:
     return "identifying" if kind == "probe" else "highlighting"
 
 
+def _motivation_to_str(item: dict) -> str:
+    """WADM motivation column value.
+
+    Standard WADM usually carries a single motivation; this app allows the user to pick
+    several. The frontend sends them as a list, which we join into one space-separated string
+    for the column (the full list is preserved in `data`). Storing the joined string is a
+    deliberate for-now choice — good enough for display/filtering. Falls back to the
+    kind-derived default when nothing was chosen; also tolerates a legacy single-string value.
+    """
+    motivation = item.get("motivation")
+    if isinstance(motivation, (list, tuple)):
+        joined = " ".join(str(m).strip() for m in motivation if str(m).strip())
+        if joined:
+            return joined
+    elif isinstance(motivation, str) and motivation.strip():
+        return motivation.strip()
+    return _kind_to_motivation(item.get("kind"))
+
+
 def _geometry_to_svg(ann: dict) -> str:
     """Render the annotation geometry as an SVG fragment (the WADM SvgSelector value)."""
     geom = ann.get("geometry") or {}
@@ -316,7 +335,7 @@ def _build_roi_row(dataset_id: str, ann: dict, cube: "HsiCube | None") -> RoiAnn
         cube_id=cube_id,
         body=body,
         body_format="text/plain" if body else None,
-        motivation=_kind_to_motivation(item.get("kind")),
+        motivation=_motivation_to_str(item),
         creator=item.get("creator"),
         created=_parse_dt(item.get("createdAt")) or now,
         modified=_parse_dt(item.get("updatedAt")),
