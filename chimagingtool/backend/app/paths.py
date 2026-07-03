@@ -28,7 +28,20 @@ else:
 # A double-clicked / installed app usually cannot write to its own install folder
 # (e.g. C:\Program Files, /Applications), so user data goes to the OS-standard per-user
 # location that platformdirs resolves for us.
-DATA_ROOT = Path(user_data_dir("ImagingTool", "NTNU"))
+#
+# Resolve the writable root:
+#   1. IMAGINGTOOL_HOME env var, if set (explicit override);
+#   2. else, when running under the Microsoft Store build of Python (which silently redirects
+#      %LOCALAPPDATA% writes into a hidden ...\Packages\...\LocalCache\ sandbox, making the DB
+#      impossible to find), fall back to a plain, findable folder in the user's profile;
+#   3. else the OS-standard per-user location (correct for a normal Python and the packaged app).
+_home = os.environ.get("IMAGINGTOOL_HOME")
+if _home:
+    DATA_ROOT = Path(_home).expanduser()
+elif "windowsapps" in sys.base_prefix.lower():
+    DATA_ROOT = Path.home() / "ImagingTool"
+else:
+    DATA_ROOT = Path(user_data_dir("ImagingTool", "NTNU"))
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATA_ROOT / "app.db"

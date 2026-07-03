@@ -1,12 +1,15 @@
 ﻿import logging
 import os
 import re
+import uuid
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from spectral import io as spyio
 
 from ..analysis.classification.distance_metrics import DistanceMetrics
@@ -15,7 +18,18 @@ from ..analysis.classification.reference_registry import (
     get_reference_library_or_404,
     list_reference_libraries,
 )
+from ..db.database import get_db
+from ..db.ids import stable_id
+from ..db.models import (
+    DerivedDataset,
+    HsiCube,
+    ProcessingOperation,
+    RoiAnnotation,
+    SpectralExtraction,
+    SpectralLibrary,
+)
 from ..services.dataset_store import get_dataset_record_or_404
+from ..services.dataset_sync import upsert_spectral_library
 from ..paths import APP_DATA_DIR
 
 
@@ -308,8 +322,80 @@ def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.nda
     return distances
 
 
+def _persist_classification_run(
+    db: Session, req: "PipelineRequest", reference_library: dict,
+    results: dict, top_matches: list[dict],
+) -> None:
+    """Record a run as provenance: SpectralExtraction -> ProcessingOperation -> DerivedDataset."""
+    now = datetime.now(timezone.utc)
+
+    # Ensure the referenced SpectralLibrary exists (populated by the startup sync; upsert if not).
+    lib_uuid = stable_id("library", req.reference_library_id)
+    if db.get(SpectralLibrary, lib_uuid) is None:
+        upsert_spectral_library(db, reference_library, now)
+        db.flush()
+
+    # SpectralExtraction: one per ROI (upsert). roi_id FK only if that annotation is saved.
+    ext_uuid = stable_id("extraction", req.roi_id)
+    roi_fk = None
+    try:
+        candidate = uuid.UUID(str(req.roi_id))
+        if db.get(RoiAnnotation, candidate) is not None:
+            roi_fk = candidate
+    except (ValueError, TypeError):
+        pass
+    wl = req.mean_signal.wavelengths_nm
+    wrange = f"{min(wl):.1f}-{max(wl):.1f} nm" if wl else None
+    db.merge(SpectralExtraction(
+        extraction_id=ext_uuid,
+        roi_id=roi_fk,
+        library_id=lib_uuid,
+        mean_spectrum=list(req.mean_signal.values),
+        std_spectrum=[],       # not provided by the pipeline request
+        pixel_count=0,         # mean_signal is precomputed; count unknown here
+        wavelength_range=wrange,
+        extracted_at=now,
+    ))
+    db.flush()  # persist the extraction before the operation references it
+
+    # ProcessingOperation: one row per run (accumulates a provenance history).
+    op_uuid = uuid.uuid4()
+    db.add(ProcessingOperation(
+        operation_id=op_uuid,
+        operation_type="classification",
+        method_name=req.classification_method_id,
+        parameters={
+            "preprocessing_method_id": req.preprocessing_method_id,
+            "reference_library_id": req.reference_library_id,
+            "top_k": req.top_k,
+        },
+        executed_at=now,
+        software_version="ImagingTool",
+        input_extraction_id=ext_uuid,
+    ))
+    db.flush()  # persist the operation before the derived dataset references it
+
+    # DerivedDataset: the result (ranking) stored in `lookup`; no output file.
+    cube_uuid = stable_id("cube", req.dataset_id)
+    was_from = cube_uuid if db.get(HsiCube, cube_uuid) is not None else ext_uuid
+    db.add(DerivedDataset(
+        derived_id=uuid.uuid4(),
+        type="classification",
+        file_format="json",
+        data_ref=None,
+        lookup=results,
+        classes=len(top_matches),
+        class_names=[str(m.get("label_name")) for m in top_matches],
+        was_derived_from=was_from,
+        operation_id=op_uuid,
+        created_at=now,
+    ))
+
+    db.commit()
+
+
 @router.post("/classification/pipeline/run")
-def run_pipeline(req: PipelineRequest):
+def run_pipeline(req: PipelineRequest, db: Session = Depends(get_db)):
     get_dataset_record_or_404(req.dataset_id)
     reference_library = get_reference_library_or_404(req.reference_library_id)
 
@@ -366,6 +452,13 @@ def run_pipeline(req: PipelineRequest):
         "reference_library_label": reference_library["label"],
         "top_matches": top_matches,
     }
+
+    # Record the run as provenance (best-effort — never block the classification response).
+    try:
+        _persist_classification_run(db, req, reference_library, results, top_matches)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to persist classification run (results still returned)")
 
     return {
         "datasetId": req.dataset_id,

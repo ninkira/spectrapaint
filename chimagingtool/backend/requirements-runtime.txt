@@ -21,6 +21,6 @@ spectral            # ENVI / HSI cube reading
 platformdirs        # per-user writable data dir (SQLite lives here)
 pywebview           # native desktop window wrapper
 
-# --- Database (add when you implement the DB — see docs/database-tutorial.md) ---
-# SQLAlchemy
-# alembic
+# --- Database ---
+SQLAlchemy>=2.0,<2.1
+alembic

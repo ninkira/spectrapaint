@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,8 +10,17 @@ from .api.routes_datasets import router as datasets_router
 from .api.routes_spectra import router as spectra_router
 from .core.config import settings
 from .paths import FRONTEND_DIR
+from .startup import init_app
 
-app = FastAPI(title="HSI Service")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create the SQLite DB on first run and upgrade it to the latest schema — before serving.
+    init_app()
+    yield
+
+
+app = FastAPI(title="HSI Service", lifespan=lifespan)
 
 
 app.add_middleware(

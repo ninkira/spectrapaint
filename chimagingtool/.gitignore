@@ -14,6 +14,20 @@ dist-ssr
 .idea/
 *.venv/
 
+# Python / PyInstaller build output
+build/
+__pycache__/
+*.pyc
+# NOTE: `dist` (above) already covers imaging-app/dist and backend/dist.
+# The packaged app + installer are built OUTSIDE the repo (C:\ImagingToolBuild) to dodge
+# OneDrive file-locking — see docs/packaging-guide.md.
+
+# Local-only working docs (kept out of the repo for now)
+docs/
+
+# Imaging data — user-provided, never committed (large HSI cubes also covered by *.hdr/*.img)
+backend/app/data/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -37,13 +37,8 @@ def _wait_until_up(timeout_seconds: int = 30) -> bool:
 
 
 def main() -> None:
-    # When you add the database (see docs/database-tutorial.md), create app/startup.py with
-    # an init_app() that runs Alembic, then uncomment these two lines so the DB is created
-    # and migrated to the latest schema before the server starts serving requests:
-    #
-    #     from app.startup import init_app
-    #     init_app()
-
+    # The database is created + migrated automatically on server startup (see the FastAPI
+    # lifespan in app/main.py -> init_app), so there is nothing to do here.
     threading.Thread(target=_serve, daemon=True).start()
     _wait_until_up()
     webview.create_window("Imaging Tool", f"http://{HOST}:{PORT}", width=1400, height=900)

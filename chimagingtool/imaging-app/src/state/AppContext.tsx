@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { listDatasets, rgbUrl, visualUrl, saveDatasetAnnotations } from '../lib/api';
+import { listDatasets, rgbUrl, visualUrl, saveDatasetAnnotations, getDatasetAnnotations } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import type { Layer } from './types'
@@ -194,6 +194,17 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     const d = datasets.find(x => x.id === datasetId);
     setDataset(d);
   }, [datasetId, datasets]);
+
+  // Load saved annotations for the selected dataset from the backend, so they survive a
+  // page reload / dataset switch (they are persisted in the DB but were never fetched back).
+  useEffect(() => {
+    if (!datasetId) return;
+    let cancelled = false;
+    getDatasetAnnotations(datasetId)
+      .then(anns => { if (!cancelled) setAnnotationsForDataset(datasetId, anns); })
+      .catch(console.error);
+    return () => { cancelled = true };
+  }, [datasetId, setAnnotationsForDataset]);
 
   useEffect(() => {
     if (!datasetId || !dataset) return
