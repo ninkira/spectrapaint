@@ -1,0 +1,77 @@
+name: CI
+
+# Runs on every PR and on pushes to main. Cross-platform sanity checks only —
+# the Windows installer build (PyInstaller + Inno Setup) is intentionally a
+# separate release workflow, since it must run on a Windows runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch/PR cancels the older in-progress run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chimagingtool/imaging-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: chimagingtool/imaging-app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build (runs tsc, then vite build)
+        run: npm run build
+
+  backend:
+    name: Backend (import smoke + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chimagingtool/backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: chimagingtool/backend/requirements-runtime.txt
+
+      - name: Install runtime dependencies
+        # Use the lean runtime set (NOT requirements.txt, which is a dev mega-dump).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-runtime.txt
+          pip install pytest
+
+      - name: Import smoke test
+        # Catches syntax errors, bad imports, and missing runtime deps.
+        run: python -c "import app.main; print('app.main imported OK')"
+
+      - name: Run tests (tolerates no tests yet)
+        run: |
+          set +e
+          pytest -q
+          code=$?
+          # 0 = passed, 5 = no tests collected. Anything else is a real failure.
+          if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then
+            [ "$code" -eq 5 ] && echo "No tests collected yet — add tests under chimagingtool/backend."
+            exit 0
+          fi
+          exit "$code"
