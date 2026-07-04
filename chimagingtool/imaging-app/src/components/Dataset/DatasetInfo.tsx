@@ -1,8 +1,35 @@
 import React, { useEffect, useState } from 'react'
 import InfoModal from './DatasetInfoModal'
-import { Info, Copy, Check } from 'lucide-react'
 import { getDatasetMetadata, type HsiCubeMeta } from '../../lib/api'
 import { useApp } from '../../state/AppContext'
+
+// Inline SVG icons. Self-contained (no icon lib) and FILL-based (fill="currentColor") rather than
+// stroked: filled paths render like text glyphs, whereas an earlier stroked version painted blank
+// in this app. Size is pinned via inline style so no stylesheet rule can collapse it to 0.
+const Icon: React.FC<{ d: string; size?: number }> = ({ d, size = 16 }) => (
+  <svg
+    aria-hidden="true"
+    viewBox="0 0 24 24"
+    width={size}
+    height={size}
+    fill="currentColor"
+    style={{ display: 'block', width: size, height: size, flexShrink: 0 }}
+  >
+    <path d={d} />
+  </svg>
+)
+
+const InfoIcon = () => (
+  <Icon size={18} d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+)
+
+const CopyIcon = () => (
+  <Icon size={14} d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
+)
+
+const CheckIcon = () => (
+  <Icon size={14} d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+)
 
 // ENVI "data type" header code → human-readable label.
 const DATA_TYPE_LABELS: Record<number, string> = {
@@ -20,6 +47,41 @@ const DATA_TYPE_LABELS: Record<number, string> = {
 }
 
 const DASH = '—'
+
+// HSI processing level for the leading summary chip. All current data is reflectance; when the
+// filename encodes a different level (radiance / raw) we surface that instead, else "Reflectance".
+const HSI_PROCESSING_KEYWORDS = ['reflectance', 'radiance', 'raw'] as const
+
+const hsiProcessingLevel = (name: string, path: string): string => {
+  // Look only at the file title (basename) and display name — NOT the folder path, so a parent
+  // folder like "raw/" doesn't get mistaken for a processing level. e.g. "hsi/raw/001.hdr" has
+  // no keyword in "001" → defaults to Reflectance.
+  const filename = path.split('/').pop() ?? path
+  const hay = `${name} ${filename}`.toLowerCase()
+  const found = HSI_PROCESSING_KEYWORDS.find((k) => hay.includes(k)) ?? 'reflectance'
+  return found.charAt(0).toUpperCase() + found.slice(1)
+}
+
+// Summary-chip variants: the leading type chip is a solid accent, the processing-level chip an
+// outlined accent, and the numeric facts are muted.
+type ChipVariant = 'accent' | 'accent-soft' | 'muted'
+type Chip = { label: string; variant: ChipVariant }
+
+const CHIP_STYLES: Record<ChipVariant, React.CSSProperties> = {
+  accent: {
+    padding: '0.12rem 0.55rem', borderRadius: '6px', fontSize: '0.75rem', whiteSpace: 'nowrap',
+    background: '#1d4ed833', border: '1px solid #3b82f6', color: '#93c5fd',
+    fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em',
+  },
+  'accent-soft': {
+    padding: '0.12rem 0.55rem', borderRadius: '6px', fontSize: '0.75rem', whiteSpace: 'nowrap',
+    background: 'transparent', border: '1px solid #3b82f6', color: '#93c5fd',
+  },
+  muted: {
+    padding: '0.12rem 0.5rem', borderRadius: '6px', fontSize: '0.75rem', whiteSpace: 'nowrap',
+    border: '1px solid var(--border, #1f2633)', background: 'var(--panel2, #10161f)', color: 'var(--muted, #aab3c0)',
+  },
+}
 
 const isBlank = (v: unknown): boolean =>
   v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
@@ -65,7 +127,7 @@ const CopyButton: React.FC<{ text: string; label?: string }> = ({ text, label = 
         flexShrink: 0,
       }}
     >
-      {copied ? <Check size={14} /> : <Copy size={14} />}
+      {copied ? <CheckIcon /> : <CopyIcon />}
     </button>
   )
 }
@@ -173,8 +235,26 @@ const DatasetInfo: React.FC = () => {
     return <div style={{ padding: '0.5rem 0', color: 'var(--muted, #aab3c0)' }}>No dataset selected.</div>
   }
 
+  // Compact at-a-glance summary, built from the dataset already in context (no extra fetch).
+  // The full ENVI metadata lives behind the info icon (the modal below). The leading chip is
+  // the dataset type; the rest are dimensions and (for HSI) band count + spectral range.
+  const wl = dataset.wavelengths_nm
+  const typeLabel = dataset.type === 'hsi' ? 'HSI' : dataset.type.toUpperCase()
+  const summaryItems: Chip[] = [{ label: typeLabel, variant: 'accent' }]
+  if (isHsi) {
+    summaryItems.push({ label: hsiProcessingLevel(dataset.name, dataset.path), variant: 'accent-soft' })
+  }
+  summaryItems.push({
+    label: `${dataset.width.toLocaleString()} × ${dataset.height.toLocaleString()} px`,
+    variant: 'muted',
+  })
+  if (isHsi && wl && wl.length) {
+    summaryItems.push({ label: `${wl.length} bands`, variant: 'muted' })
+    summaryItems.push({ label: `${Math.round(Math.min(...wl))}–${Math.round(Math.max(...wl))} nm`, variant: 'muted' })
+  }
+
   return (
-    <div style={{ marginBottom: '0.75rem' }}>
+    <div style={{ padding: '0.75rem 0.75rem 1rem', marginBottom: '1.25rem', borderBottom: '1px solid var(--border, #1f2633)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
         <h2 style={{ margin: 0, fontSize: '1.15rem', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {dataset.name}
@@ -193,13 +273,21 @@ const DatasetInfo: React.FC = () => {
             borderRadius: '8px',
             border: '1px solid var(--border, #1f2633)',
             background: 'transparent',
-            color: 'inherit',
+            color: 'var(--ink, #e8edf5)',
             cursor: 'pointer',
             flexShrink: 0,
           }}
         >
-          <Info aria-hidden="true" size={16} />
+          <InfoIcon />
         </button>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.6rem' }}>
+        {summaryItems.map((chip) => (
+          <span key={chip.label} style={CHIP_STYLES[chip.variant]}>
+            {chip.label}
+          </span>
+        ))}
       </div>
 
       <InfoModal
