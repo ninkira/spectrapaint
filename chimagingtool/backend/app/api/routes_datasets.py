@@ -16,9 +16,16 @@ from sqlalchemy.orm import Session
 from ..db.database import get_db
 from ..db.ids import stable_id
 from ..db.models import HsiCube, RoiAnnotation
-from ..models.dataset_meta import DatasetMeta
+from ..models.dataset_meta import DatasetMeta, HsiCubeMeta
 from ..paths import APP_DATA_DIR
-from ..services.cube_loader import downsample2, extract_rgb, get_cube_for_path, open_envi, read_metadata
+from ..services.cube_loader import (
+    downsample2,
+    extract_rgb,
+    get_cube_for_path,
+    open_envi,
+    read_full_metadata,
+    read_metadata,
+)
 from ..services.dataset_store import get_dataset_record_or_404, registry
 from ..services.image_ops import percent_stretch, png_bytes
 
@@ -200,6 +207,33 @@ def list_datasets():
             )
 
     return out
+
+
+@router.get("/datasets/{id}/metadata", response_model=HsiCubeMeta)
+def dataset_metadata(id: str):
+    """Full ENVI-cube metadata for the dataset-info modal (HSI datasets only).
+
+    Read straight from the ENVI header so every field is available — the DB HsiCube mirror only
+    stores a subset. `cube_id` matches the deterministic id used by the DB sync; `created_at`
+    is the header file's modification time. `checksum` is not computed here (it would mean
+    hashing the whole cube on every open) and is returned as None.
+    """
+    rec = get_dataset_record_or_404(id)
+    hdr = rec.get("envi_hdr")
+    if not hdr:
+        raise HTTPException(status_code=400, detail="Metadata is available for HSI datasets only")
+    if not os.path.exists(hdr):
+        raise HTTPException(status_code=404, detail=f"Header file not found: {hdr}")
+
+    full = read_full_metadata(open_envi(hdr))
+    created_at = datetime.fromtimestamp(os.stat(hdr).st_mtime, tz=timezone.utc)
+    return HsiCubeMeta(
+        cube_id=str(stable_id("cube", id)),
+        data_ref=_to_relative_project_path(hdr),
+        created_at=created_at,
+        checksum=None,
+        **full,
+    )
 
 
 @router.get("/datasets/{id}/thumbnail")
