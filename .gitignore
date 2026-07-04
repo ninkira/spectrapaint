@@ -1,6 +1,6 @@
 # Frontend
-chimagingtool/node_modules/
-chimagingtool/dist/
+spectrapaint/node_modules/
+spectrapaint/dist/
 *.log
 
 # Backend Python
@@ -14,6 +14,15 @@ __pycache__/
 backend/app/data/testdata/
 *.hdr
 *.img
+
+# Packaged build output (PyInstaller + Inno Setup), built at the repo top level.
+# The repo is in OneDrive; pause OneDrive sync while building to avoid file locks.
+/dist/
+/build/
+/*Setup.exe
+
+# Local SQLite database (created next to the app)
+/app.db*
 
 # OS junk
 .DS_Store

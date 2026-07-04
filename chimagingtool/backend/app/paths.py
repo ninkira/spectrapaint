@@ -20,7 +20,7 @@ if getattr(sys, "frozen", False):
     FRONTEND_DIR = RESOURCE_DIR / "frontend"
     ALEMBIC_DIR = RESOURCE_DIR / "alembic"
 else:
-    BACKEND_DIR = Path(__file__).resolve().parents[1]          # .../chimagingtool/backend
+    BACKEND_DIR = Path(__file__).resolve().parents[1]          # .../spectrapaint/backend
     FRONTEND_DIR = BACKEND_DIR.parent / "imaging-app" / "dist"  # produced by `npm run build`
     ALEMBIC_DIR = BACKEND_DIR / "alembic"
 
@@ -44,7 +44,21 @@ else:
     DATA_ROOT = Path(user_data_dir("ImagingTool", "NTNU"))
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
-DB_PATH = DATA_ROOT / "app.db"
+# --- Database location: kept next to the app ("portable") ---------------------------------
+# The SQLite DB lives beside the app rather than in a hidden per-user folder:
+#   * dev (run from source) -> the repo top level,
+#   * packaged (frozen)     -> next to the executable.
+# Override with IMAGINGTOOL_DB to force a specific folder (e.g. the old per-user location).
+_db_override = os.environ.get("IMAGINGTOOL_DB")
+if _db_override:
+    _db_dir = Path(_db_override).expanduser()
+elif getattr(sys, "frozen", False):
+    _db_dir = Path(sys.executable).resolve().parent
+else:
+    _db_dir = Path(__file__).resolve().parents[3]  # repo top level (…/<repo root>)
+_db_dir.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = _db_dir / "app.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 # --- Imaging data directory (the HSI cubes / images the app reads) ------------------------

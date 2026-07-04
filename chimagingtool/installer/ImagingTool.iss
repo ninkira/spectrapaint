@@ -9,8 +9,9 @@
 #define AppVersion "0.1.0"
 #define AppPublisher "NTNU"
 #define AppExeName "ImagingTool.exe"
-; Path to the PyInstaller build output (kept OUTSIDE OneDrive to avoid file locks).
-#define DistDir "C:\ImagingToolBuild\dist\ImagingTool"
+; Path to the PyInstaller build output, at the repo top level (<repo>\dist\ImagingTool).
+; NOTE: the repo lives in OneDrive — pause OneDrive sync while building to avoid file locks.
+#define DistDir SourcePath + "..\..\dist\ImagingTool"
 
 [Setup]
 AppName={#AppName}
@@ -20,8 +21,9 @@ DefaultDirName={autopf}\ImagingTool
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputDir=C:\ImagingToolBuild\installer
+OutputDir=..\..
 OutputBaseFilename=ImagingToolSetup
+; Installer (ImagingToolSetup.exe) is written to the repo top level.
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

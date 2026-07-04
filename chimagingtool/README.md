@@ -1,1 +1,1 @@
-# chimagingtool
+# SpectraPaint
