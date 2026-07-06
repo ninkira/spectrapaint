@@ -108,6 +108,12 @@ export async function uploadDataset(
   return r.json()
 }
 
+// Remove a dataset: deletes its file(s) and database records on the backend.
+export async function deleteDataset(id: string): Promise<void> {
+  const r = await fetch(`${base}/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(`Failed to delete ${id} (${r.status})`)
+}
+
 export async function getDatasetMetadata(id: string): Promise<HsiCubeMeta> {
   const r = await fetch(`${base}/datasets/${id}/metadata`);
   if (!r.ok) throw new Error('Failed to load dataset metadata');

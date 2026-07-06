@@ -15,10 +15,18 @@ from sqlalchemy.orm import Session
 
 from ..db.database import get_db
 from ..db.ids import stable_id
-from ..db.models import HsiCube, RoiAnnotation
+from ..db.models import (
+    DataAcquisition,
+    ExternalInput,
+    HsiCube,
+    ProcessingOperation,
+    RoiAnnotation,
+    SpectralExtraction,
+)
 from ..models.dataset_meta import DatasetMeta, HsiCubeMeta
 from ..paths import APP_DATA_DIR
 from ..services.cube_loader import (
+    _find_envi_data_file,
     downsample2,
     extract_rgb,
     get_cube_for_path,
@@ -26,7 +34,11 @@ from ..services.cube_loader import (
     read_full_metadata,
     read_metadata,
 )
-from ..services.dataset_store import get_dataset_record_or_404, registry
+from ..services.dataset_store import (
+    get_dataset_record_or_404,
+    invalidate_registry_cache,
+    registry,
+)
 from ..services.image_ops import percent_stretch, png_bytes
 
 router = APIRouter()
@@ -269,6 +281,92 @@ def visual(id: str, max_w: int | None = Query(default=None, ge=64, le=8192)):
         raise HTTPException(status_code=400, detail=f"Unsupported visual file type: {visual_path}")
     content = _cached_visual_png_bytes(visual_path, _mtime_ns(visual_path), max_w)
     return Response(content=content, media_type="image/png")
+
+
+def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str]:
+    """Delete a dataset's DB rows and return the on-disk file paths to remove.
+
+    Order matters because SQLite foreign-key enforcement is ON (see db.database):
+      1. clear the dataset's annotations, and the spectral extractions they triggered — first
+         detaching any classification run (ProcessingOperation) that referenced an extraction, so
+         the run history survives rather than blocking the delete;
+      2. delete the cube / external input;
+      3. delete its DataAcquisition only if nothing else still points at it (old datasets shared
+         one acquisition; uploads each get a dedicated one).
+    """
+    roi_ids = [
+        r[0] for r in db.query(RoiAnnotation.roi_id)
+        .filter(RoiAnnotation.dataset_id == dataset_id).all()
+    ]
+    if roi_ids:
+        ext_ids = [
+            r[0] for r in db.query(SpectralExtraction.extraction_id)
+            .filter(SpectralExtraction.roi_id.in_(roi_ids)).all()
+        ]
+        if ext_ids:
+            db.query(ProcessingOperation).filter(
+                ProcessingOperation.input_extraction_id.in_(ext_ids)
+            ).update({ProcessingOperation.input_extraction_id: None}, synchronize_session=False)
+            db.query(SpectralExtraction).filter(
+                SpectralExtraction.extraction_id.in_(ext_ids)
+            ).delete(synchronize_session=False)
+        db.query(RoiAnnotation).filter(
+            RoiAnnotation.roi_id.in_(roi_ids)
+        ).delete(synchronize_session=False)
+        db.flush()
+
+    files: list[str] = []
+    acquisition_ids: set = set()
+
+    hdr = rec.get("envi_hdr")
+    if hdr:
+        cube = db.get(HsiCube, stable_id("cube", dataset_id))
+        if cube is not None:
+            if cube.acquisition_id:
+                acquisition_ids.add(cube.acquisition_id)
+            db.delete(cube)
+        files.append(hdr)
+        data_file = _find_envi_data_file(hdr)
+        if data_file:
+            files.append(data_file)
+    else:
+        visual_path = rec.get("tiff") or rec.get("png") or rec.get("jpg")
+        inp = db.get(ExternalInput, stable_id("input", dataset_id))
+        if inp is not None:
+            if inp.acquisition_id:
+                acquisition_ids.add(inp.acquisition_id)
+            db.delete(inp)
+        if visual_path:
+            files.append(visual_path)
+    db.flush()
+
+    for acq_id in acquisition_ids:
+        still_used = (
+            db.query(HsiCube).filter(HsiCube.acquisition_id == acq_id).count()
+            + db.query(ExternalInput).filter(ExternalInput.acquisition_id == acq_id).count()
+        )
+        if still_used == 0:
+            acq = db.get(DataAcquisition, acq_id)
+            if acq is not None:
+                db.delete(acq)
+
+    return files
+
+
+@router.delete("/datasets/{id}")
+def delete_dataset(id: str, db: Session = Depends(get_db)):
+    """Remove a dataset: its DB rows (annotations, cube/input, orphaned acquisition) and file(s)."""
+    rec = get_dataset_record_or_404(id)
+    files = _delete_dataset_records(db, id, rec)
+    db.commit()
+    invalidate_registry_cache()
+    # Files are removed only after the DB commit (the DB is the source of truth for the listing).
+    for path in files:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"ok": True, "id": id}
 
 
 def _load_legacy_annotations(dataset_id: str) -> list[dict]:

@@ -2,6 +2,7 @@ import { useMemo, useState, type JSX } from 'react'
 import { FilePlus2, Trash2, X } from 'lucide-react'
 import { useApp } from '../state/AppContext'
 import type { Layer } from '../state/types'
+import { deleteDataset } from '../lib/api'
 import UploadDataModal from './Dataset/UploadDataModal'
 
 type TreeNode = {
@@ -52,12 +53,13 @@ function buildLayerTree(layers: Layer[]): TreeNode[] {
 }
 
 export default function DataManager() {
-  const { fileLayers, toggleLayer } = useApp()
+  const { fileLayers, toggleLayer, datasetId, setDatasetId, refreshDatasets } = useApp()
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [uploadOpen, setUploadOpen] = useState(false)
   // Checkboxes are only shown while "Remove data" is armed.
   const [removeMode, setRemoveMode] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set())
+  const [deleting, setDeleting] = useState(false)
   const tree = useMemo(() => buildLayerTree(fileLayers), [fileLayers])
 
   const toggleRemoveMode = () => {
@@ -72,6 +74,44 @@ export default function DataManager() {
       else next.add(id)
       return next
     })
+  }
+
+  // Delete the checked layers (files + DB rows), then refresh and tidy up selection.
+  const deleteSelected = async () => {
+    const ids = [...checkedIds]
+    if (ids.length === 0) return
+    const label = ids.length === 1 ? 'this dataset' : `these ${ids.length} datasets`
+    if (!window.confirm(
+      `Remove ${label}? This permanently deletes the file(s) and their database records.`,
+    )) return
+
+    setDeleting(true)
+    try {
+      const results = await Promise.allSettled(ids.map((id) => deleteDataset(id)))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      const remaining = await refreshDatasets()
+      // If the layer being viewed was removed, fall back to the first remaining dataset.
+      if (datasetId && ids.includes(datasetId) && remaining[0]) {
+        setDatasetId(remaining[0].id)
+      }
+      setRemoveMode(false)
+      setCheckedIds(new Set())
+      if (failed > 0) {
+        window.alert(`${failed} of ${ids.length} item(s) could not be removed. See the console for details.`)
+      }
+    } catch (err) {
+      console.error('Failed to remove datasets', err)
+      window.alert('Could not remove the selected data.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // The trash/X button: delete when items are checked, otherwise arm/disarm remove mode.
+  const onRemoveButtonClick = () => {
+    if (deleting) return
+    if (removeMode && checkedIds.size > 0) void deleteSelected()
+    else toggleRemoveMode()
   }
 
   const renderNode = (node: TreeNode, depth = 0): JSX.Element[] => {
@@ -147,10 +187,17 @@ export default function DataManager() {
           <button
             type="button"
             className={`lm-action lm-action--danger${removeMode ? ' active' : ''}`}
-            title={removeMode && checkedIds.size > 0 ? 'Cancel selection' : 'Remove data'}
-            aria-label="Remove data"
+            title={
+              removeMode && checkedIds.size > 0
+                ? `Remove ${checkedIds.size} selected`
+                : removeMode
+                  ? 'Cancel'
+                  : 'Remove data'
+            }
+            aria-label={removeMode && checkedIds.size > 0 ? 'Remove selected data' : 'Remove data'}
             aria-pressed={removeMode}
-            onClick={toggleRemoveMode}
+            disabled={deleting}
+            onClick={onRemoveButtonClick}
           >
             {removeMode && checkedIds.size > 0 ? <X size={18} /> : <Trash2 size={18} />}
           </button>
