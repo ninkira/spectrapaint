@@ -11,7 +11,7 @@
 #define AppExeName "ImagingTool.exe"
 ; Path to the PyInstaller build output, at the repo top level (<repo>\dist\ImagingTool).
 ; NOTE: the repo lives in OneDrive — pause OneDrive sync while building to avoid file locks.
-#define DistDir SourcePath + "..\..\dist\ImagingTool"
+#define DistDir SourcePath + "..\dist\ImagingTool"
 
 [Setup]
 AppName={#AppName}
@@ -21,7 +21,7 @@ DefaultDirName={autopf}\ImagingTool
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputDir=..\..
+OutputDir=..
 OutputBaseFilename=ImagingToolSetup
 ; Installer (ImagingToolSetup.exe) is written to the repo top level.
 Compression=lzma2

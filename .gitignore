@@ -1,6 +1,6 @@
 # Frontend
-spectrapaint/node_modules/
-spectrapaint/dist/
+frontend/node_modules/
+frontend/dist/
 *.log
 
 # Backend Python
@@ -10,10 +10,14 @@ __pycache__/
 .env
 .env.*
 
-# Local HSI data
-backend/app/data/testdata/
+# Imaging data — user-provided, never committed (large HSI cubes)
+backend/app/data/
 *.hdr
 *.img
+
+# IDE / local-only working docs
+.idea/
+docs/
 
 # Packaged build output (PyInstaller + Inno Setup), built at the repo top level.
 # The repo is in OneDrive; pause OneDrive sync while building to avoid file locks.

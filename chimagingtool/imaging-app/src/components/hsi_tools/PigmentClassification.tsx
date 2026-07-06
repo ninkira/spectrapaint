@@ -1,4 +1,4 @@
-// imaging-app/src/components/hsi_tools/PigmentClassification.tsx
+// frontend/src/components/hsi_tools/PigmentClassification.tsx
 import React, { useEffect, useState } from 'react'
 import SpectrumPlot, { type Spectrum } from './SpectrumPlot'
 import InfoModal from '../Dataset/DatasetInfoModal'

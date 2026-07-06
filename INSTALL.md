@@ -38,13 +38,13 @@ Windows **Settings → Apps → Imaging Tool → Uninstall**. Your data folder i
 
 ## For developers: running and building from source
 
-Requires **Python 3.12+** and **Node.js 22+** on Windows. Run these from the project root
-(the `spectrapaint` folder).
+Requires **Python 3.12+** and **Node.js 22+** on Windows. All paths below are relative to the
+project root (the folder you cloned).
 
 ### Run from source
 
 ```
-cd spectrapaint/imaging-app
+cd frontend
 npm install
 npm run build          # or: npm run dev  (live-reload frontend on http://localhost:5173)
 
@@ -59,13 +59,13 @@ python -m venv .venv
 
 ### Build the installer
 
-1. Build the frontend (`npm run build`, as above) so `imaging-app/dist` exists.
+1. Build the frontend (`npm run build`, as above) so `frontend/dist` exists.
 2. Build the app with **PyInstaller** — output goes to the repo top level:
 
    ```
-   cd spectrapaint/backend
+   cd backend
    .venv\Scripts\pip install pyinstaller
-   .venv\Scripts\pyinstaller --distpath ../../dist --workpath ../../build ImagingTool.spec
+   .venv\Scripts\pyinstaller --distpath ../dist --workpath ../build ImagingTool.spec
    ```
 
    This produces `dist/ImagingTool/ImagingTool.exe` at the repo top level.
@@ -76,7 +76,7 @@ python -m venv .venv
 3. Build the installer with **Inno Setup**:
 
    ```
-   ISCC.exe spectrapaint/installer/ImagingTool.iss
+   ISCC.exe installer/ImagingTool.iss
    ```
 
    This produces **`ImagingToolSetup.exe`** at the repo top level.

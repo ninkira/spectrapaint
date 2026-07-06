@@ -20,8 +20,8 @@ if getattr(sys, "frozen", False):
     FRONTEND_DIR = RESOURCE_DIR / "frontend"
     ALEMBIC_DIR = RESOURCE_DIR / "alembic"
 else:
-    BACKEND_DIR = Path(__file__).resolve().parents[1]          # .../spectrapaint/backend
-    FRONTEND_DIR = BACKEND_DIR.parent / "imaging-app" / "dist"  # produced by `npm run build`
+    BACKEND_DIR = Path(__file__).resolve().parents[1]          # .../backend
+    FRONTEND_DIR = BACKEND_DIR.parent / "frontend" / "dist"    # produced by `npm run build`
     ALEMBIC_DIR = BACKEND_DIR / "alembic"
 
 # --- Writable per-user data --------------------------------------------------------------
@@ -55,7 +55,7 @@ if _db_override:
 elif getattr(sys, "frozen", False):
     _db_dir = Path(sys.executable).resolve().parent
 else:
-    _db_dir = Path(__file__).resolve().parents[3]  # repo top level (…/<repo root>)
+    _db_dir = Path(__file__).resolve().parents[2]  # repo top level (…/<repo root>)
 _db_dir.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = _db_dir / "app.db"
