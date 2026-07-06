@@ -1,12 +1,33 @@
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from spectral import io as spyio
 import numpy as np
 from typing import Dict, Any, Tuple
 
+
+def _find_envi_data_file(hdr_path: str) -> str | None:
+    """Locate the binary that belongs to an ENVI header (a sibling file sharing its stem).
+
+    SpectralPython normally finds the cube itself, but uploaded files may use a data-file
+    extension it does not probe by default. This lets us pass the data path explicitly.
+    """
+    p = Path(hdr_path)
+    for cand in sorted(p.parent.glob(p.stem + ".*")):
+        if cand.is_file() and cand.suffix.lower() != ".hdr":
+            return str(cand)
+    return None
+
+
 def open_envi(hdr_path: str):
-    return spyio.envi.open(hdr_path)
+    try:
+        return spyio.envi.open(hdr_path)
+    except Exception:
+        data = _find_envi_data_file(hdr_path)
+        if data is None:
+            raise
+        return spyio.envi.open(hdr_path, data)
 
 def read_metadata(img) -> Dict[str, Any]:
     md = img.metadata.copy()

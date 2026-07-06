@@ -71,14 +71,28 @@ class DataAcquisition(Base):
     captured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     instrument_id: Mapped[str | None] = mapped_column(String, nullable=True)
     instrument_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    illumination_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    illumination_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    illumination_notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_to_object: Mapped[float | None] = mapped_column(Float, nullable=True)
+    instrument_position: Mapped[str | None] = mapped_column(String, nullable=True)
+    scan_duration: Mapped[float | None] = mapped_column(Float, nullable=True)
     dark_reference: Mapped[bool] = mapped_column(default=False)
     white_reference: Mapped[bool] = mapped_column(default=False)
+    calibration_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    preprocessing_notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    software_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    operator: Mapped[str | None] = mapped_column(String, nullable=True)
+    exif_available: Mapped[bool] = mapped_column(default=False)
+    envi_available: Mapped[bool] = mapped_column(default=False)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
 
     artefact: Mapped["Artefact"] = relationship(back_populates="acquisitions")
     cubes: Mapped[list["HsiCube"]] = relationship(
         back_populates="acquisition", cascade="all, delete-orphan"
     )
+    external_inputs: Mapped[list["ExternalInput"]] = relationship(back_populates="acquisition")
 
 
 class HsiCube(Base):
@@ -101,6 +115,12 @@ class HsiCube(Base):
     fwhm: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     interleave: Mapped[str | None] = mapped_column(String, nullable=True)  # BSQ|BIL|BIP
     data_type: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    default_bands: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    pixel_size: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sensor_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    file_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    header_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
     spectral_range_min: Mapped[float | None] = mapped_column(Float, nullable=True)
     spectral_range_max: Mapped[float | None] = mapped_column(Float, nullable=True)
 
@@ -193,6 +213,9 @@ class ExternalInput(Base):
 
     input_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.project_id"))
+    acquisition_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("data_acquisitions.acquisition_id"), nullable=True
+    )
     source_tool: Mapped[str] = mapped_column(String)
     capture_modality: Mapped[str] = mapped_column(String)  # XRF | RGB | other
     file_format: Mapped[str] = mapped_column(String)
@@ -210,6 +233,7 @@ class ExternalInput(Base):
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="external_inputs")
+    acquisition: Mapped["DataAcquisition | None"] = relationship(back_populates="external_inputs")
 
 
 class Visualisation(Base):

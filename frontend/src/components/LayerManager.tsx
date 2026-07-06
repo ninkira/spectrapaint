@@ -1,6 +1,7 @@
 import { useMemo, useState, type JSX } from 'react'
 import { useApp } from '../state/AppContext'
 import type { Layer } from '../state/types'
+import UploadDataModal from './Dataset/UploadDataModal'
 
 type TreeNode = {
   id: string
@@ -52,6 +53,7 @@ function buildLayerTree(layers: Layer[]): TreeNode[] {
 export default function DataManager() {
   const { fileLayers, toggleLayer } = useApp()
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [uploadOpen, setUploadOpen] = useState(false)
   const tree = useMemo(() => buildLayerTree(fileLayers), [fileLayers])
 
   const renderNode = (node: TreeNode, depth = 0): JSX.Element[] => {
@@ -96,7 +98,7 @@ export default function DataManager() {
       <div className="lm-header">
         <span>Data Manager</span>
         <div className="lm-actions">
-          <button title="New layer">＋</button>
+          <button title="Upload data" onClick={() => setUploadOpen(true)}>＋</button>
           <button title="Group">🗃️</button>
           <button title="Delete">🗑️</button>
         </div>
@@ -105,6 +107,8 @@ export default function DataManager() {
       <div className="lm-list" role="tree">
         {tree.flatMap((node) => renderNode(node))}
       </div>
+
+      <UploadDataModal isOpen={uploadOpen} onClose={() => setUploadOpen(false)} />
     </aside>
   )
 }

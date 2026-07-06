@@ -151,61 +151,62 @@ def _annotation_file_path(dataset_id: str) -> Path:
 class DatasetAnnotationsPayload(BaseModel):
     annotations: list[dict]
 
+def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
+    """Build a DatasetMeta from a registry record, or None if its file is missing.
+
+    Shared by the list endpoint and the upload endpoint (so a freshly uploaded dataset comes back
+    in exactly the same shape the UI already renders).
+    """
+    name = rec.get("name", id_)
+    hdr = rec.get("envi_hdr")
+
+    if hdr:
+        if not os.path.exists(hdr):
+            return None
+        md = read_metadata(open_envi(hdr))
+        return DatasetMeta(
+            id=id_,
+            name=name,
+            type="hsi",
+            path=_to_relative_project_path(hdr),
+            width=md["width"],
+            height=md["height"],
+            wavelengths_nm=md["wavelengths_nm"],
+        )
+
+    visual_path = rec.get("tiff") or rec.get("png") or rec.get("jpg")
+    if visual_path:
+        if not os.path.exists(visual_path):
+            return None
+        width, height = _read_visual_size(visual_path)
+        ext = Path(visual_path).suffix.lower()
+        if ext in (".tif", ".tiff"):
+            vtype = "tiff"
+        elif ext == ".png":
+            vtype = "png"
+        else:
+            vtype = "jpg"
+        return DatasetMeta(
+            id=id_,
+            name=name,
+            type=vtype,
+            path=_to_relative_project_path(visual_path),
+            width=width,
+            height=height,
+            wavelengths_nm=None,
+        )
+
+    return None
+
+
 # General calls
 @router.get("/datasets", response_model=list[DatasetMeta])
 def list_datasets():
     out: list[DatasetMeta] = []
-
     for id_, rec in registry().items():
-        name = rec.get("name", id_)
-        hdr = rec.get("envi_hdr")
-        tiff = rec.get("tiff")
-        png = rec.get("png")
-        jpg = rec.get("jpg")
-
-        if hdr:
-            if not os.path.exists(hdr):
-                continue
-            md = read_metadata(open_envi(hdr))
-            path = _to_relative_project_path(hdr)
-            out.append(
-                DatasetMeta(
-                    id=id_,
-                    name=name,
-                    type="hsi",
-                    path=path,
-                    width=md["width"],
-                    height=md["height"],
-                    wavelengths_nm=md["wavelengths_nm"],
-                )
-            )
-            continue
-
-        visual_path = tiff or png or jpg
-        if visual_path:
-            if not os.path.exists(visual_path):
-                continue
-            width, height = _read_visual_size(visual_path)
-            ext = Path(visual_path).suffix.lower()
-            if ext in (".tif", ".tiff"):
-                vtype = "tiff"
-            elif ext == ".png":
-                vtype = "png"
-            else:
-                vtype = "jpg"
-            path = _to_relative_project_path(visual_path)
-            out.append(
-                DatasetMeta(
-                    id=id_,
-                    name=name,
-                    type=vtype,
-                    path=path,
-                    width=width,
-                    height=height,
-                    wavelengths_nm=None,
-                )
-            )
-
+        meta = build_dataset_meta(id_, rec)
+        if meta is not None:
+            out.append(meta)
     return out
 
 
