@@ -103,6 +103,7 @@ class HsiCube(Base):
     cube_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     acquisition_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("data_acquisitions.acquisition_id"))
     data_ref: Mapped[str] = mapped_column(String)  # path to the cube, relative to APP_DATA_DIR
+    title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
     checksum: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
@@ -216,6 +217,7 @@ class ExternalInput(Base):
     acquisition_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("data_acquisitions.acquisition_id"), nullable=True
     )
+    title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
     source_tool: Mapped[str] = mapped_column(String)
     capture_modality: Mapped[str] = mapped_column(String)  # XRF | RGB | other
     file_format: Mapped[str] = mapped_column(String)

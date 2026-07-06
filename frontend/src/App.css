@@ -237,6 +237,16 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 .lm-file--active{border-color:#3b82f6; background:#16243a}
 .lm-file--active .lm-name{color:#7ab8ff; font-weight:600}
 
+/* Upload modal — dark native controls + a themed file-picker button */
+.upload-form{color-scheme:dark}
+.upload-form input[type=file]{color:var(--ink); font-size:0.85rem}
+.upload-form input[type=file]::file-selector-button{
+  background:#1b2434; color:var(--ink); border:1px solid #3a465c;
+  border-radius:6px; padding:6px 10px; margin-right:10px; cursor:pointer;
+}
+.upload-form input[type=file]::file-selector-button:hover{background:#22304a; border-color:#4a5a78}
+.upload-form input::placeholder, .upload-form textarea::placeholder{color:#5f708a}
+
 /* Content: Primary Display | resizer | Work Area */
 .content{
   display: flex;

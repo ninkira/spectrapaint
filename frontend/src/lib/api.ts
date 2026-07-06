@@ -46,6 +46,9 @@ export type UploadMetadata = {
   data_kind: DataKind
   target_modality: TargetModality
 
+  // display name / label for the dataset
+  title?: string
+
   // external-input basics
   source_tool?: string
   capture_date?: string        // EXIF

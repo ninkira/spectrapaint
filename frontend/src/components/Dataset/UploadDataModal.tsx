@@ -4,11 +4,15 @@ import { useApp } from '../../state/AppContext'
 import { uploadDataset, type DataKind, type TargetModality, type UploadMetadata } from '../../lib/api'
 
 const VISUAL_EXT = ['.tif', '.tiff', '.png', '.jpg', '.jpeg']
+// Extensions accepted by the picker (ENVI header + common binary cube extensions + visuals).
+const ACCEPT = '.hdr,.img,.raw,.dat,.bin,.cube,.bsq,.bil,.bip,.tif,.tiff,.png,.jpg,.jpeg'
+
+const isHdr = (name: string) => name.toLowerCase().endsWith('.hdr')
+const isVisual = (name: string) => VISUAL_EXT.some((e) => name.toLowerCase().endsWith(e))
 
 function detectKind(name: string): DataKind | null {
-  const lower = name.toLowerCase()
-  if (lower.endsWith('.hdr')) return 'hsi'
-  if (VISUAL_EXT.some((e) => lower.endsWith(e))) return 'visual'
+  if (isHdr(name)) return 'hsi'
+  if (isVisual(name)) return 'visual'
   return null
 }
 
@@ -30,6 +34,7 @@ const labelStyle: React.CSSProperties = {
 }
 
 type FormState = {
+  title: string
   target_modality: TargetModality
   source_tool: string
   notes: string
@@ -61,6 +66,7 @@ type FormState = {
 }
 
 const INITIAL: FormState = {
+  title: '',
   target_modality: 'XRF',
   source_tool: '',
   notes: '',
@@ -89,10 +95,21 @@ const INITIAL: FormState = {
   created_at: '',
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  required,
+  children,
+}: {
+  label: string
+  required?: boolean
+  children: React.ReactNode
+}) {
   return (
     <label style={labelStyle}>
-      {label}
+      <span>
+        {label}
+        {required && <span style={{ color: '#f87171' }}> *</span>}
+      </span>
       {children}
     </label>
   )
@@ -152,13 +169,25 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     onClose()
   }
 
-  const onPickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = e.target.files?.[0] ?? null
-    setFile(picked)
+  // One picker for everything. For an HSI cube the user selects the .hdr and its binary together;
+  // we pair them up (header -> `file`, the other selected file -> `binary`).
+  const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? [])
     setError(null)
-    if (picked && detectKind(picked.name) === 'hsi') {
+    if (picked.length === 0) {
+      setFile(null)
+      setBinary(null)
+      return
+    }
+    const hdr = picked.find((f) => isHdr(f.name))
+    if (hdr) {
+      setFile(hdr)
+      setBinary(picked.find((f) => f !== hdr) ?? null)
       set('target_modality', 'HSI')
       set('envi_available', true)
+    } else {
+      setFile(picked.find((f) => isVisual(f.name)) ?? picked[0])
+      setBinary(null)
     }
   }
 
@@ -167,8 +196,9 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     if (!file) return { error: 'Please choose a file to upload.' }
     if (!kind) return { error: 'Unsupported file type. Use an ENVI .hdr, or a TIFF/PNG/JPEG.' }
     if (kind === 'hsi' && !binary) {
-      return { error: 'An ENVI cube needs its binary data file in addition to the .hdr header.' }
+      return { error: 'An ENVI cube needs its binary data file — select the .hdr and its .img/.raw together.' }
     }
+    if (!form.title.trim()) return { error: 'Please enter a title/label for the dataset.' }
 
     const s = (v: string) => (v.trim() ? v.trim() : undefined)
     const num = (v: string): number | undefined => {
@@ -194,6 +224,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     const meta: UploadMetadata = {
       data_kind: kind,
       target_modality: kind === 'hsi' ? 'HSI' : form.target_modality,
+      title: form.title.trim(),
       source_tool: s(form.source_tool),
       notes: s(form.notes),
       captured_at: s(form.captured_at),
@@ -248,40 +279,65 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
       isOpen={isOpen}
       title="Upload data"
       onClose={close}
-      panelStyle={{ maxWidth: 640, width: '92vw', color: '#0f1521' }}
+      panelStyle={{
+        maxWidth: 640,
+        width: '92vw',
+        background: '#141a22',
+        color: '#e8edf5',
+        border: '1px solid #1f2633',
+      }}
     >
-      <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+      <form
+        className="upload-form"
+        onSubmit={onSubmit}
+        style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}
+      >
         {/* --- File selection --- */}
-        <Field label="File">
+        <Field label="File(s)" required>
           <input
             type="file"
-            accept=".hdr,.tif,.tiff,.png,.jpg,.jpeg"
-            onChange={onPickFile}
+            multiple
+            accept={ACCEPT}
+            onChange={onPickFiles}
             style={inputStyle}
           />
+          <span style={{ fontSize: '0.75rem', color: '#8aa0bf' }}>
+            For an HSI cube, select the <code>.hdr</code> and its <code>.img</code>/<code>.raw</code>{' '}
+            together.
+          </span>
         </Field>
 
         {file && !kind && (
-          <div style={{ color: '#b91c1c', fontSize: '0.85rem' }}>
+          <div style={{ color: '#f87171', fontSize: '0.85rem' }}>
             Unsupported file type — choose an ENVI <code>.hdr</code> or a TIFF/PNG/JPEG.
           </div>
         )}
 
         {kind === 'hsi' && (
-          <>
-            <Field label="ENVI binary cube (data file)">
-              <input
-                type="file"
-                onChange={(e) => setBinary(e.target.files?.[0] ?? null)}
-                style={inputStyle}
-              />
-            </Field>
-            <div style={{ fontSize: '0.82rem', color: '#475569' }}>
-              Detected an ENVI cube → registered as <strong>HSI</strong>. Dimensions, wavelengths,
-              interleave and the other ENVI header fields are read from the header automatically.
-            </div>
-          </>
+          <div style={{ fontSize: '0.82rem', color: '#8aa0bf' }}>
+            Detected an ENVI cube → registered as <strong>HSI</strong>.<br />
+            Header: <code>{file?.name}</code> · Binary:{' '}
+            {binary ? (
+              <code>{binary.name}</code>
+            ) : (
+              <span style={{ color: '#f87171' }}>missing — also select the .img/.raw file</span>
+            )}
+            <br />
+            Dimensions, wavelengths, interleave and the other ENVI header fields are read
+            automatically.
+          </div>
         )}
+
+        {/* --- Title --- */}
+        <Field label="Title / label" required>
+          <input
+            type="text"
+            value={form.title}
+            onChange={(e) => set('title', e.target.value)}
+            placeholder="A name for this dataset"
+            style={inputStyle}
+          />
+        </Field>
 
         {kind === 'visual' && (
           <Field label="This image is input to…">
@@ -531,7 +587,11 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
           <button type="button" className="btn btn-secondary" onClick={close} disabled={submitting}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={submitting || !file}>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={submitting || !file || !form.title.trim() || (kind === 'hsi' && !binary)}
+          >
             {submitting ? 'Uploading…' : 'Upload'}
           </button>
         </div>

@@ -50,6 +50,7 @@ class UploadMetadata(BaseModel):
 
     data_kind: Literal["hsi", "visual"]
     target_modality: Literal["HSI", "XRF", "RGB", "other"]
+    title: str | None = None  # user-facing display label for the dataset
 
     # External-input basics (also reused on the acquisition where the columns overlap).
     source_tool: str | None = None
@@ -200,6 +201,7 @@ def _handle_hsi(
         cube_id=stable_id("cube", dataset_id),
         acquisition_id=acq.acquisition_id,
         data_ref=_rel(hdr_path),
+        title=(meta.title.strip() if meta.title and meta.title.strip() else None),
         created_at=now,
         samples=full["samples"],
         lines=full["lines"],
@@ -251,6 +253,7 @@ def _handle_visual(
         input_id=stable_id("input", dataset_id),
         project_id=project_uuid,
         acquisition_id=acq.acquisition_id,
+        title=(meta.title.strip() if meta.title and meta.title.strip() else None),
         source_tool=meta.source_tool or "user upload",
         capture_modality=meta.target_modality,
         file_format=ext.lstrip("."),

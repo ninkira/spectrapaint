@@ -72,7 +72,7 @@ def _build_registry_from_db() -> dict[str, Any]:
         for cube in db.query(HsiCube).all():
             dataset_id = _dataset_id_from_data_ref(cube.data_ref)
             out[dataset_id] = {
-                "name": _default_name(cube.data_ref),
+                "name": cube.title or _default_name(cube.data_ref),
                 "project_id": PROJECT_ID,
                 "project_name": PROJECT_NAME,
                 "envi_hdr": str(_abs_path(cube.data_ref)),
@@ -83,7 +83,7 @@ def _build_registry_from_db() -> dict[str, Any]:
             if dataset_id in out:
                 continue
             rec: dict[str, Any] = {
-                "name": _default_name(inp.data_ref),
+                "name": inp.title or _default_name(inp.data_ref),
                 "project_id": PROJECT_ID,
                 "project_name": PROJECT_NAME,
             }
