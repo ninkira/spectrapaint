@@ -1,4 +1,5 @@
 import { useMemo, useState, type JSX } from 'react'
+import { FilePlus2, Trash2, X } from 'lucide-react'
 import { useApp } from '../state/AppContext'
 import type { Layer } from '../state/types'
 import UploadDataModal from './Dataset/UploadDataModal'
@@ -54,7 +55,24 @@ export default function DataManager() {
   const { fileLayers, toggleLayer } = useApp()
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [uploadOpen, setUploadOpen] = useState(false)
+  // Checkboxes are only shown while "Remove data" is armed.
+  const [removeMode, setRemoveMode] = useState(false)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set())
   const tree = useMemo(() => buildLayerTree(fileLayers), [fileLayers])
+
+  const toggleRemoveMode = () => {
+    setRemoveMode((prev) => !prev)
+    setCheckedIds(new Set())
+  }
+
+  const toggleChecked = (id: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const renderNode = (node: TreeNode, depth = 0): JSX.Element[] => {
     const indent = { paddingLeft: `${8 + depth * 14}px` }
@@ -81,26 +99,61 @@ export default function DataManager() {
 
     const layer = node.layer
     if (!layer) return []
+
+    // Remove mode: show a checkbox so several layers can be picked for removal.
+    if (removeMode) {
+      return [
+        <label key={node.id} className="lm-item" role="treeitem" style={indent}>
+          <input
+            type="checkbox"
+            checked={checkedIds.has(layer.id)}
+            onChange={() => toggleChecked(layer.id)}
+          />
+          <span className="lm-name">{node.name}</span>
+        </label>,
+      ]
+    }
+
+    // Normal mode: click to choose; the chosen layer is highlighted by colour (no checkbox).
     return [
-      <label key={node.id} className="lm-item" role="treeitem" style={indent}>
-        <input
-          type="checkbox"
-          checked={layer.on}
-          onChange={() => toggleLayer(layer.id)}
-        />
+      <button
+        key={node.id}
+        type="button"
+        role="treeitem"
+        aria-selected={layer.on}
+        className={`lm-item lm-file${layer.on ? ' lm-file--active' : ''}`}
+        style={{ ...indent, width: '100%', justifyContent: 'flex-start' }}
+        onClick={() => toggleLayer(layer.id)}
+      >
         <span className="lm-name">{node.name}</span>
-      </label>,
+      </button>,
     ]
   }
 
   return (
     <aside className="layer-manager">
       <div className="lm-header">
-        <span>Data Manager</span>
+        <span className="lm-header-title">Data Manager</span>
         <div className="lm-actions">
-          <button title="Upload data" onClick={() => setUploadOpen(true)}>＋</button>
-          <button title="Group">🗃️</button>
-          <button title="Delete">🗑️</button>
+          <button
+            type="button"
+            className="lm-action"
+            title="Add data"
+            aria-label="Add data"
+            onClick={() => setUploadOpen(true)}
+          >
+            <FilePlus2 size={18} />
+          </button>
+          <button
+            type="button"
+            className={`lm-action lm-action--danger${removeMode ? ' active' : ''}`}
+            title={removeMode && checkedIds.size > 0 ? 'Cancel selection' : 'Remove data'}
+            aria-label="Remove data"
+            aria-pressed={removeMode}
+            onClick={toggleRemoveMode}
+          >
+            {removeMode && checkedIds.size > 0 ? <X size={18} /> : <Trash2 size={18} />}
+          </button>
         </div>
       </div>
 
