@@ -1,13 +1,13 @@
-# Installing Imaging Tool
+# Installing SpectraPaint
 
-Imaging Tool is a desktop app for viewing and analysing hyperspectral (HSI) image data.
+SpectraPaint is a desktop app for viewing and analysing hyperspectral (HSI) image data.
 This guide is written for non-technical users — no command line needed.
 
 ---
 
 ## 1. Install (Windows)
 
-1. Get the installer file **`ImagingToolSetup.exe`** (from your provider, or build it using the
+1. Get the installer file **`SpectraPaintSetup.exe`** (from your provider, or build it using the
    developer steps at the bottom of this page).
 2. **Double-click** it to start the installer.
 3. If Windows shows a blue **"Windows protected your PC"** box, click **More info → Run anyway**.
@@ -18,7 +18,7 @@ This guide is written for non-technical users — no command line needed.
 
 ## 2. Launch the app
 
-- Open it from the **Start menu** (search for "Imaging Tool") or from the desktop shortcut.
+- Open it from the **Start menu** (search for "SpectraPaint") or from the desktop shortcut.
 - The app opens in its own window. Its database is created automatically the first time you run
   it — there is nothing to set up.
 
@@ -26,13 +26,13 @@ This guide is written for non-technical users — no command line needed.
 
 The app reads imaging data from a data folder:
 
-1. In the Start menu, click the shortcut **"Imaging Tool Data Folder"** to open that folder.
+1. In the Start menu, click the shortcut **"SpectraPaint Data Folder"** to open that folder.
 2. Copy your project folder into it (for example an `old_man` folder containing the HSI files).
 3. Restart the app — your data now appears in the list.
 
 ## 4. Uninstall
 
-Windows **Settings → Apps → Imaging Tool → Uninstall**. Your data folder is left untouched.
+Windows **Settings → Apps → SpectraPaint → Uninstall**. Your data folder is left untouched.
 
 ---
 
@@ -65,27 +65,27 @@ python -m venv .venv
    ```
    cd backend
    .venv\Scripts\pip install pyinstaller
-   .venv\Scripts\pyinstaller --distpath ../dist --workpath ../build ImagingTool.spec
+   .venv\Scripts\pyinstaller --distpath ../dist --workpath ../build SpectraPaint.spec
    ```
 
-   This produces `dist/ImagingTool/ImagingTool.exe` at the repo top level.
+   This produces `dist/SpectraPaint/SpectraPaint.exe` at the repo top level.
 
 3. Build the installer with **Inno Setup**:
 
    ```
-   ISCC.exe installer/ImagingTool.iss
+   ISCC.exe installer/SpectraPaint.iss
    ```
 
-   This produces **`ImagingToolSetup.exe`** at the repo top level.
+   This produces **`SpectraPaintSetup.exe`** at the repo top level.
 
 ### Where things live
 
 | Item | Location |
 |------|----------|
-| App executable (built) | `dist/ImagingTool/ImagingTool.exe` (repo top level) |
-| Installer (built) | `ImagingToolSetup.exe` (repo top level) |
+| App executable (built) | `dist/SpectraPaint/SpectraPaint.exe` (repo top level) |
+| Installer (built) | `SpectraPaintSetup.exe` (repo top level) |
 | Database — run from source | `app.db` at the repo top level |
-| Database — installed app | next to `ImagingTool.exe` in the install folder |
-| Imaging data folder | `%LOCALAPPDATA%\NTNU\ImagingTool\data` |
+| Database — installed app | next to `SpectraPaint.exe` in the install folder |
+| Imaging data folder | `%LOCALAPPDATA%\NTNU\SpectraPaint\data` |
 
 Build artifacts (`dist/`, `build/`, `*Setup.exe`) and the local `app.db` are git-ignored.

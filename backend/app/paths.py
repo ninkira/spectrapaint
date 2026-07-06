@@ -30,26 +30,26 @@ else:
 # location that platformdirs resolves for us.
 #
 # Resolve the writable root:
-#   1. IMAGINGTOOL_HOME env var, if set (explicit override);
+#   1. SPECTRAPAINT_HOME env var, if set (explicit override);
 #   2. else, when running under the Microsoft Store build of Python (which silently redirects
 #      %LOCALAPPDATA% writes into a hidden ...\Packages\...\LocalCache\ sandbox, making the DB
 #      impossible to find), fall back to a plain, findable folder in the user's profile;
 #   3. else the OS-standard per-user location (correct for a normal Python and the packaged app).
-_home = os.environ.get("IMAGINGTOOL_HOME")
+_home = os.environ.get("SPECTRAPAINT_HOME")
 if _home:
     DATA_ROOT = Path(_home).expanduser()
 elif "windowsapps" in sys.base_prefix.lower():
-    DATA_ROOT = Path.home() / "ImagingTool"
+    DATA_ROOT = Path.home() / "SpectraPaint"
 else:
-    DATA_ROOT = Path(user_data_dir("ImagingTool", "NTNU"))
+    DATA_ROOT = Path(user_data_dir("SpectraPaint", "NTNU"))
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
 # --- Database location: kept next to the app ("portable") ---------------------------------
 # The SQLite DB lives beside the app rather than in a hidden per-user folder:
 #   * dev (run from source) -> the repo top level,
 #   * packaged (frozen)     -> next to the executable.
-# Override with IMAGINGTOOL_DB to force a specific folder (e.g. the old per-user location).
-_db_override = os.environ.get("IMAGINGTOOL_DB")
+# Override with SPECTRAPAINT_DB to force a specific folder (e.g. the old per-user location).
+_db_override = os.environ.get("SPECTRAPAINT_DB")
 if _db_override:
     _db_dir = Path(_db_override).expanduser()
 elif getattr(sys, "frozen", False):
@@ -64,10 +64,10 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 # --- Imaging data directory (the HSI cubes / images the app reads) ------------------------
 # This data is large (multi-GB) and is intentionally NOT bundled into the executable.
 # Resolution order:
-#   1) IMAGINGTOOL_DATA_DIR env var  -> point the app at any folder (e.g. your existing data),
+#   1) SPECTRAPAINT_DATA_DIR env var  -> point the app at any folder (e.g. your existing data),
 #   2) frozen build                  -> a writable per-user "data" folder next to the DB,
 #   3) running from source (dev)     -> the repo's backend/app/data.
-_env_data_dir = os.environ.get("IMAGINGTOOL_DATA_DIR")
+_env_data_dir = os.environ.get("SPECTRAPAINT_DATA_DIR")
 if _env_data_dir:
     APP_DATA_DIR = Path(_env_data_dir)
 elif getattr(sys, "frozen", False):

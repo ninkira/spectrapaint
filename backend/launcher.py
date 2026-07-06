@@ -41,7 +41,7 @@ def main() -> None:
     # lifespan in app/main.py -> init_app), so there is nothing to do here.
     threading.Thread(target=_serve, daemon=True).start()
     _wait_until_up()
-    webview.create_window("Imaging Tool", f"http://{HOST}:{PORT}", width=1400, height=900)
+    webview.create_window("SpectraPaint", f"http://{HOST}:{PORT}", width=1400, height=900)
     webview.start()
 
 

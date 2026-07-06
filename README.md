@@ -2,7 +2,7 @@
 
 A desktop app for viewing and analysing hyperspectral (HSI) image data — RGB / false-colour
 viewing, spectral plotting, region and probe annotation, and pigment / material classification
-for cultural-heritage imaging. The built desktop app is called **Imaging Tool**.
+for cultural-heritage imaging. The built desktop app is called **SpectraPaint**.
 
 ## Quick start
 

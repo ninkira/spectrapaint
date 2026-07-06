@@ -370,7 +370,7 @@ def _persist_classification_run(
             "top_k": req.top_k,
         },
         executed_at=now,
-        software_version="ImagingTool",
+        software_version="SpectraPaint",
         input_extraction_id=ext_uuid,
     ))
     db.flush()  # persist the operation before the derived dataset references it
