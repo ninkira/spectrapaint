@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('../imaging-app/dist', 'frontend')]
+datas = [('../frontend/dist', 'frontend')]
 binaries = []
 hiddenimports = []
 hiddenimports += collect_submodules('uvicorn')
@@ -31,7 +31,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ImagingTool',
+    name='SpectraPaint',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -50,5 +50,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='ImagingTool',
+    name='SpectraPaint',
 )

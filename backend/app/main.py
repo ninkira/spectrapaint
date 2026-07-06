@@ -43,7 +43,7 @@ def health():
     return {"ok": True}
 
 
-# Serve the built React app (imaging-app/dist) when it exists. In pure dev you run the
+# Serve the built React app (frontend/dist) when it exists. In pure dev you run the
 # Vite dev server instead, so this is simply skipped if no build has been produced yet.
 # IMPORTANT: mount LAST so it does not shadow the API routes or /healthz above.
 if FRONTEND_DIR.exists():

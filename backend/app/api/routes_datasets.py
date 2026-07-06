@@ -373,7 +373,7 @@ def _build_roi_row(dataset_id: str, ann: dict, cube: "HsiCube | None") -> RoiAnn
         creator=item.get("creator"),
         created=_parse_dt(item.get("createdAt")) or now,
         modified=_parse_dt(item.get("updatedAt")),
-        generator="ImagingTool",
+        generator="SpectraPaint",
         generated=now,
         data=item,
     )

@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: chimagingtool/imaging-app
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: chimagingtool/imaging-app/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: chimagingtool/backend
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +51,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: chimagingtool/backend/requirements-runtime.txt
+          cache-dependency-path: backend/requirements-runtime.txt
 
       - name: Install runtime dependencies
         # Use the lean runtime set (NOT requirements.txt, which is a dev mega-dump).
@@ -71,7 +71,7 @@ jobs:
           code=$?
           # 0 = passed, 5 = no tests collected. Anything else is a real failure.
           if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then
-            [ "$code" -eq 5 ] && echo "No tests collected yet — add tests under chimagingtool/backend."
+            [ "$code" -eq 5 ] && echo "No tests collected yet — add tests under backend."
             exit 0
           fi
           exit "$code"

@@ -81,7 +81,7 @@ export default function WorkArea() {
     setAnnotationTitle(activeAnnotation?.title ?? activeAnnotation?.label ?? '')
     setAnnotationDescription(activeAnnotation?.description ?? '')
     setAnnotationCreator(
-      activeAnnotation?.creator ?? localStorage.getItem('imagingtool.lastCreator') ?? ''
+      activeAnnotation?.creator ?? localStorage.getItem('spectrapaint.lastCreator') ?? ''
     )
     const motivation = activeAnnotation?.motivation
     setAnnotationMotivations(
@@ -111,7 +111,7 @@ export default function WorkArea() {
       const cleanTitle = annotationTitle.trim()
       const cleanDescription = annotationDescription.trim()
       const cleanCreator = annotationCreator.trim()
-      if (cleanCreator) localStorage.setItem('imagingtool.lastCreator', cleanCreator)
+      if (cleanCreator) localStorage.setItem('spectrapaint.lastCreator', cleanCreator)
       const nextForDataset = annotations
         .filter((a) => a.datasetId === dataset.id)
         .map((a) => (
