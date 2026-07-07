@@ -23,7 +23,13 @@ from ..db.models import (
     RoiAnnotation,
     SpectralExtraction,
 )
-from ..models.dataset_meta import DatasetMeta, HsiCubeMeta
+from ..models.dataset_meta import (
+    AcquisitionMeta,
+    DatasetDbMeta,
+    DatasetMeta,
+    ExternalInputMeta,
+    HsiCubeMeta,
+)
 from ..paths import APP_DATA_DIR
 from ..services.cube_loader import (
     _find_envi_data_file,
@@ -247,6 +253,32 @@ def dataset_metadata(id: str):
         checksum=None,
         **full,
     )
+
+
+@router.get("/datasets/{id}/db-meta", response_model=DatasetDbMeta)
+def dataset_db_meta(id: str, db: Session = Depends(get_db)):
+    """DB-stored metadata for the dataset-info tabs: the capture session (DataAcquisition) and,
+    for a visual, its import row (ExternalInput). The HSI cube's ENVI metadata is served separately
+    by /metadata (read from the header)."""
+    rec = get_dataset_record_or_404(id)
+    acquisition = None
+    external = None
+
+    if rec.get("envi_hdr"):
+        cube = db.get(HsiCube, stable_id("cube", id))
+        acq_id = cube.acquisition_id if cube is not None else None
+    else:
+        inp = db.get(ExternalInput, stable_id("input", id))
+        if inp is not None:
+            external = ExternalInputMeta.model_validate(inp)
+        acq_id = inp.acquisition_id if inp is not None else None
+
+    if acq_id is not None:
+        acq = db.get(DataAcquisition, acq_id)
+        if acq is not None:
+            acquisition = AcquisitionMeta.model_validate(acq)
+
+    return DatasetDbMeta(acquisition=acquisition, external=external)
 
 
 @router.get("/datasets/{id}/thumbnail")

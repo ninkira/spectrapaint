@@ -1,7 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import InfoModal from './DatasetInfoModal'
-import { getDatasetMetadata, type HsiCubeMeta } from '../../lib/api'
+import {
+  getDatasetDbMeta,
+  getDatasetMetadata,
+  type AcquisitionMeta,
+  type DatasetDbMeta,
+  type ExternalInputMeta,
+  type HsiCubeMeta,
+} from '../../lib/api'
 import { useApp } from '../../state/AppContext'
+import type { DatasetMeta } from '../../lib/api'
 
 // Inline SVG icons. Self-contained (no icon lib) and FILL-based (fill="currentColor") rather than
 // stroked: filled paths render like text glyphs, whereas an earlier stroked version painted blank
@@ -97,6 +105,8 @@ const fmtDate = (iso: string | null): string => {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
 }
+
+const fmtBool = (v: boolean | null | undefined): string => (v ? 'Yes' : 'No')
 
 // ---- small presentational building blocks -------------------------------------------------
 
@@ -206,28 +216,279 @@ const Row: React.FC<{
   )
 }
 
+// ---- tab content views --------------------------------------------------------------------
+
+// HSI cube metadata (the ENVI header) — unchanged content, now living in the "Cube metadata" tab.
+const CubeMetaView: React.FC<{ meta: HsiCubeMeta | null; loading: boolean; error: string | null }> = ({
+  meta,
+  loading,
+  error,
+}) => {
+  if (loading) {
+    return <div style={{ padding: '1.5rem 0', textAlign: 'center', color: 'var(--muted, #aab3c0)' }}>Loading metadata…</div>
+  }
+  if (error) {
+    return (
+      <div style={{ padding: '1rem', borderRadius: '8px', background: '#7f1d1d33', border: '1px solid #ef4444', color: '#fca5a5' }}>
+        Failed to load metadata: {error}
+      </div>
+    )
+  }
+  if (!meta) return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+        <StatTile label="Width" value={fmtInt(meta.samples)} sub="samples" />
+        <StatTile label="Height" value={fmtInt(meta.lines)} sub="lines" />
+        <StatTile label="Bands" value={fmtInt(meta.number_of_bands)} />
+        <StatTile
+          label="Range"
+          value={
+            meta.spectral_range_min != null && meta.spectral_range_max != null
+              ? `${fmtNum(meta.spectral_range_min, 0)}–${fmtNum(meta.spectral_range_max, 0)}`
+              : DASH
+          }
+          sub={meta.wavelength_units}
+        />
+      </div>
+
+      <Section title="Spectral">
+        <Row
+          label="Spectral range"
+          value={
+            meta.spectral_range_min != null && meta.spectral_range_max != null
+              ? `${fmtNum(meta.spectral_range_min)} – ${fmtNum(meta.spectral_range_max)} ${meta.wavelength_units}`
+              : undefined
+          }
+        />
+        <Row label="Bands" value={fmtInt(meta.number_of_bands)} />
+        <Row label="Wavelength units" value={meta.wavelength_units} />
+        <Row label="FWHM" value={meta.fwhm && meta.fwhm.length ? `${meta.fwhm.length} values` : undefined} />
+        <Row label="Default bands" value={meta.default_bands && meta.default_bands.length ? meta.default_bands.join(', ') : undefined} />
+        {meta.wavelengths.length > 0 && (
+          <div style={{ gridColumn: '1 / -1' }}>
+            <details>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted, #aab3c0)', fontSize: '0.8rem' }}>
+                All {meta.wavelengths.length} wavelengths
+              </summary>
+              <div
+                style={{
+                  marginTop: '0.45rem',
+                  maxHeight: '9rem',
+                  overflowY: 'auto',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: '0.75rem',
+                  lineHeight: 1.6,
+                  color: 'var(--muted, #aab3c0)',
+                  background: 'var(--bg, #0f1115)',
+                  border: '1px solid var(--border, #1f2633)',
+                  borderRadius: '8px',
+                  padding: '0.5rem 0.6rem',
+                }}
+              >
+                {meta.wavelengths.map((w) => fmtNum(w)).join(', ')}
+              </div>
+            </details>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Format (ENVI)">
+        <Row label="Interleave" value={meta.interleave} />
+        <Row
+          label="Data type"
+          value={
+            meta.data_type != null
+              ? `${meta.data_type}${DATA_TYPE_LABELS[meta.data_type] ? ` — ${DATA_TYPE_LABELS[meta.data_type]}` : ''}`
+              : undefined
+          }
+        />
+        <Row label="File type" value={meta.file_type} />
+        <Row label="Header offset" value={meta.header_offset != null ? fmtInt(meta.header_offset) : undefined} />
+        <Row label="Sensor type" value={meta.sensor_type} />
+        <Row label="Pixel size" value={meta.pixel_size != null ? fmtNum(meta.pixel_size, 4) : undefined} />
+        {!isBlank(meta.description) && (
+          <div style={{ gridColumn: '1 / -1' }}>
+            <div style={{ color: 'var(--muted, #aab3c0)', marginBottom: '0.35rem' }}>Description</div>
+            <pre
+              style={{
+                margin: 0,
+                maxHeight: '10rem',
+                overflowY: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                fontSize: '0.75rem',
+                lineHeight: 1.5,
+                color: 'var(--ink, #e8edf5)',
+                background: 'var(--bg, #0f1115)',
+                border: '1px solid var(--border, #1f2633)',
+                borderRadius: '8px',
+                padding: '0.5rem 0.6rem',
+              }}
+            >
+              {meta.description}
+            </pre>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Identity">
+        <Row label="Cube ID" value={meta.cube_id} mono copy={meta.cube_id} />
+        <Row label="Data reference" value={meta.data_ref} mono copy={meta.data_ref} />
+        <Row label="Created" value={fmtDate(meta.created_at)} />
+        <Row label="Checksum" value={meta.checksum} mono copy={meta.checksum ?? undefined} />
+      </Section>
+    </div>
+  )
+}
+
+// General data for a PNG/TIFF/JPEG — the ExternalInput import row + dataset basics.
+const GeneralDataView: React.FC<{ dataset: DatasetMeta; ext: ExternalInputMeta | null }> = ({ dataset, ext }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+    <Section title="Dataset">
+      <Row label="Title" value={ext?.title ?? dataset.name} />
+      <Row label="Type" value={dataset.type} />
+      <Row label="Width" value={`${fmtInt(ext?.width ?? dataset.width)} px`} />
+      <Row label="Height" value={`${fmtInt(ext?.height_px ?? dataset.height)} px`} />
+      <Row label="File format" value={ext?.file_format ?? dataset.type} />
+      <Row label="Path" value={dataset.path} mono copy={dataset.path} />
+    </Section>
+    <Section title="Source">
+      <Row label="Source tool" value={ext?.source_tool} />
+      <Row label="Capture modality" value={ext?.capture_modality} />
+      <Row label="Belongs to" value={ext?.linked_dataset_id} mono copy={ext?.linked_dataset_id ?? undefined} />
+      <Row label="Capture date" value={ext ? fmtDate(ext.capture_date) : undefined} />
+      <Row label="Camera model" value={ext?.camera_model} />
+      <Row label="Instrument ID" value={ext?.instrument_id} />
+      <Row label="Operator" value={ext?.operator} />
+      <Row label="Rights (DC)" value={ext?.dc_rights} />
+    </Section>
+    <Section title="Provenance">
+      <Row label="Processing steps" value={ext?.processing_steps} />
+      <Row label="Created" value={ext ? fmtDate(ext.created_at) : undefined} />
+      <Row label="Imported" value={ext ? fmtDate(ext.imported_at) : undefined} />
+      <Row label="Notes" value={ext?.notes} />
+    </Section>
+  </div>
+)
+
+// Capture session (DataAcquisition) — shared by both data types.
+const AcquisitionView: React.FC<{ acq: AcquisitionMeta | null }> = ({ acq }) => {
+  if (!acq) {
+    return (
+      <div style={{ padding: '1.25rem 0', color: 'var(--muted, #aab3c0)', fontSize: '0.85rem' }}>
+        No acquisition metadata recorded for this dataset.
+      </div>
+    )
+  }
+  const hasSettings = acq.instrument_settings && Object.keys(acq.instrument_settings).length > 0
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+      <Section title="Capture session">
+        <Row label="Modality" value={acq.capture_modality} />
+        <Row label="Captured at" value={fmtDate(acq.captured_at)} />
+        <Row label="Operator" value={acq.operator} />
+        <Row label="Instrument ID" value={acq.instrument_id} />
+        <Row label="Instrument position" value={acq.instrument_position} />
+        <Row label="Software version" value={acq.software_version} />
+      </Section>
+      <Section title="Illumination & environment">
+        <Row label="Illumination type" value={acq.illumination_type} />
+        <Row label="Illumination source" value={acq.illumination_source} />
+        <Row label="Illumination notes" value={acq.illumination_notes} />
+        <Row label="Temperature" value={acq.temperature != null ? `${fmtNum(acq.temperature)} °C` : undefined} />
+        <Row label="Distance to object" value={acq.distance_to_object != null ? fmtNum(acq.distance_to_object) : undefined} />
+        <Row label="Scan duration" value={acq.scan_duration != null ? `${fmtNum(acq.scan_duration)} s` : undefined} />
+      </Section>
+      <Section title="Calibration & references">
+        <Row label="Dark reference" value={fmtBool(acq.dark_reference)} />
+        <Row label="White reference" value={fmtBool(acq.white_reference)} />
+        <Row label="Calibration ref" value={acq.calibration_ref} />
+        <Row label="EXIF available" value={fmtBool(acq.exif_available)} />
+        <Row label="ENVI available" value={fmtBool(acq.envi_available)} />
+      </Section>
+      {(acq.preprocessing_notes || acq.notes || hasSettings) && (
+        <Section title="Processing & notes">
+          <Row label="Preprocessing" value={acq.preprocessing_notes} />
+          <Row label="Notes" value={acq.notes} />
+          {hasSettings && (
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ color: 'var(--muted, #aab3c0)', marginBottom: '0.35rem' }}>Instrument settings</div>
+              <pre
+                style={{
+                  margin: 0,
+                  maxHeight: '10rem',
+                  overflowY: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: '0.75rem',
+                  lineHeight: 1.5,
+                  color: 'var(--ink, #e8edf5)',
+                  background: 'var(--bg, #0f1115)',
+                  border: '1px solid var(--border, #1f2633)',
+                  borderRadius: '8px',
+                  padding: '0.5rem 0.6rem',
+                }}
+              >
+                {JSON.stringify(acq.instrument_settings, null, 2)}
+              </pre>
+            </div>
+          )}
+        </Section>
+      )}
+    </div>
+  )
+}
+
+const tabButtonStyle = (active: boolean): React.CSSProperties => ({
+  padding: '0.45rem 0.9rem',
+  border: 'none',
+  borderBottom: active ? '2px solid #3b82f6' : '2px solid transparent',
+  background: 'transparent',
+  color: active ? 'var(--ink, #e8edf5)' : 'var(--muted, #aab3c0)',
+  fontSize: '0.85rem',
+  fontWeight: active ? 600 : 500,
+  cursor: 'pointer',
+})
+
 // ---- main component -----------------------------------------------------------------------
 
 const DatasetInfo: React.FC = () => {
   const { dataset } = useApp()
   const [isOpen, setIsOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<'primary' | 'acquisition'>('primary')
   const [meta, setMeta] = useState<HsiCubeMeta | null>(null)
+  const [dbMeta, setDbMeta] = useState<DatasetDbMeta | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const isHsi = dataset?.type === 'hsi'
 
-  // Fetch the full ENVI metadata lazily — only when the modal is open for an HSI cube.
+  // On open, fetch the DB metadata (acquisition + import row) always, plus the ENVI header for HSI.
   useEffect(() => {
-    if (!isOpen || !dataset || !isHsi) return
+    if (!isOpen || !dataset) return
     let cancelled = false
     setLoading(true)
     setError(null)
     setMeta(null)
-    getDatasetMetadata(dataset.id)
-      .then((m) => { if (!cancelled) setMeta(m) })
-      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load metadata') })
-      .finally(() => { if (!cancelled) setLoading(false) })
+    setDbMeta(null)
+    setActiveTab('primary')
+
+    const tasks: Promise<unknown>[] = [
+      getDatasetDbMeta(dataset.id)
+        .then((d) => { if (!cancelled) setDbMeta(d) })
+        .catch(() => { if (!cancelled) setDbMeta(null) }),
+    ]
+    if (isHsi) {
+      tasks.push(
+        getDatasetMetadata(dataset.id)
+          .then((m) => { if (!cancelled) setMeta(m) })
+          .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load metadata') }),
+      )
+    }
+    Promise.allSettled(tasks).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [isOpen, dataset, isHsi])
 
@@ -303,7 +564,7 @@ const DatasetInfo: React.FC = () => {
       >
         <div style={{ fontSize: '0.85rem' }}>
           {/* Chip row: type + path — always available from the dataset list */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', marginBottom: '0.9rem' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
             <span
               style={{
                 padding: '0.15rem 0.55rem',
@@ -324,135 +585,23 @@ const DatasetInfo: React.FC = () => {
             </span>
           </div>
 
-          {!isHsi && (
-            <Section title="Dataset">
-              <Row label="Width" value={`${fmtInt(dataset.width)} px`} />
-              <Row label="Height" value={`${fmtInt(dataset.height)} px`} />
-              <Row label="Type" value={dataset.type} />
-              <Row label="Path" value={dataset.path} mono copy={dataset.path} />
-              <div style={{ gridColumn: '1 / -1', color: 'var(--muted, #aab3c0)', fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                Full spectral metadata is available for HSI cubes only.
-              </div>
-            </Section>
-          )}
+          {/* Tab bar: HSI → Cube metadata | Acquisition; visual → General data | Acquisition */}
+          <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid var(--border, #1f2633)', marginBottom: '0.9rem' }}>
+            <button type="button" style={tabButtonStyle(activeTab === 'primary')} onClick={() => setActiveTab('primary')}>
+              {isHsi ? 'Cube metadata' : 'General data'}
+            </button>
+            <button type="button" style={tabButtonStyle(activeTab === 'acquisition')} onClick={() => setActiveTab('acquisition')}>
+              Acquisition
+            </button>
+          </div>
 
-          {isHsi && loading && (
-            <div style={{ padding: '1.5rem 0', textAlign: 'center', color: 'var(--muted, #aab3c0)' }}>Loading metadata…</div>
-          )}
-
-          {isHsi && error && (
-            <div style={{ padding: '1rem', borderRadius: '8px', background: '#7f1d1d33', border: '1px solid #ef4444', color: '#fca5a5' }}>
-              Failed to load metadata: {error}
-            </div>
-          )}
-
-          {isHsi && meta && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
-              {/* Headline stat tiles */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
-                <StatTile label="Width" value={fmtInt(meta.samples)} sub="samples" />
-                <StatTile label="Height" value={fmtInt(meta.lines)} sub="lines" />
-                <StatTile label="Bands" value={fmtInt(meta.number_of_bands)} />
-                <StatTile
-                  label="Range"
-                  value={
-                    meta.spectral_range_min != null && meta.spectral_range_max != null
-                      ? `${fmtNum(meta.spectral_range_min, 0)}–${fmtNum(meta.spectral_range_max, 0)}`
-                      : DASH
-                  }
-                  sub={meta.wavelength_units}
-                />
-              </div>
-
-              <Section title="Spectral">
-                <Row
-                  label="Spectral range"
-                  value={
-                    meta.spectral_range_min != null && meta.spectral_range_max != null
-                      ? `${fmtNum(meta.spectral_range_min)} – ${fmtNum(meta.spectral_range_max)} ${meta.wavelength_units}`
-                      : undefined
-                  }
-                />
-                <Row label="Bands" value={fmtInt(meta.number_of_bands)} />
-                <Row label="Wavelength units" value={meta.wavelength_units} />
-                <Row label="FWHM" value={meta.fwhm && meta.fwhm.length ? `${meta.fwhm.length} values` : undefined} />
-                <Row label="Default bands" value={meta.default_bands && meta.default_bands.length ? meta.default_bands.join(', ') : undefined} />
-                {meta.wavelengths.length > 0 && (
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <details>
-                      <summary style={{ cursor: 'pointer', color: 'var(--muted, #aab3c0)', fontSize: '0.8rem' }}>
-                        All {meta.wavelengths.length} wavelengths
-                      </summary>
-                      <div
-                        style={{
-                          marginTop: '0.45rem',
-                          maxHeight: '9rem',
-                          overflowY: 'auto',
-                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                          fontSize: '0.75rem',
-                          lineHeight: 1.6,
-                          color: 'var(--muted, #aab3c0)',
-                          background: 'var(--bg, #0f1115)',
-                          border: '1px solid var(--border, #1f2633)',
-                          borderRadius: '8px',
-                          padding: '0.5rem 0.6rem',
-                        }}
-                      >
-                        {meta.wavelengths.map((w) => fmtNum(w)).join(', ')}
-                      </div>
-                    </details>
-                  </div>
-                )}
-              </Section>
-
-              <Section title="Format (ENVI)">
-                <Row label="Interleave" value={meta.interleave} />
-                <Row
-                  label="Data type"
-                  value={
-                    meta.data_type != null
-                      ? `${meta.data_type}${DATA_TYPE_LABELS[meta.data_type] ? ` — ${DATA_TYPE_LABELS[meta.data_type]}` : ''}`
-                      : undefined
-                  }
-                />
-                <Row label="File type" value={meta.file_type} />
-                <Row label="Header offset" value={meta.header_offset != null ? fmtInt(meta.header_offset) : undefined} />
-                <Row label="Sensor type" value={meta.sensor_type} />
-                <Row label="Pixel size" value={meta.pixel_size != null ? fmtNum(meta.pixel_size, 4) : undefined} />
-                {!isBlank(meta.description) && (
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <div style={{ color: 'var(--muted, #aab3c0)', marginBottom: '0.35rem' }}>Description</div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        maxHeight: '10rem',
-                        overflowY: 'auto',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                        fontSize: '0.75rem',
-                        lineHeight: 1.5,
-                        color: 'var(--ink, #e8edf5)',
-                        background: 'var(--bg, #0f1115)',
-                        border: '1px solid var(--border, #1f2633)',
-                        borderRadius: '8px',
-                        padding: '0.5rem 0.6rem',
-                      }}
-                    >
-                      {meta.description}
-                    </pre>
-                  </div>
-                )}
-              </Section>
-
-              <Section title="Identity">
-                <Row label="Cube ID" value={meta.cube_id} mono copy={meta.cube_id} />
-                <Row label="Data reference" value={meta.data_ref} mono copy={meta.data_ref} />
-                <Row label="Created" value={fmtDate(meta.created_at)} />
-                <Row label="Checksum" value={meta.checksum} mono copy={meta.checksum ?? undefined} />
-              </Section>
-            </div>
-          )}
+          {activeTab === 'primary'
+            ? isHsi
+              ? <CubeMetaView meta={meta} loading={loading} error={error} />
+              : <GeneralDataView dataset={dataset} ext={dbMeta?.external ?? null} />
+            : loading
+              ? <div style={{ padding: '1.5rem 0', textAlign: 'center', color: 'var(--muted, #aab3c0)' }}>Loading metadata…</div>
+              : <AcquisitionView acq={dbMeta?.acquisition ?? null} />}
         </div>
       </InfoModal>
     </div>

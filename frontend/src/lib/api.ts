@@ -35,6 +35,63 @@ export type HsiCubeMeta = {
   header_offset: number | null
 }
 
+// DataAcquisition (capture session) fields — see backend AcquisitionMeta.
+export type AcquisitionMeta = {
+  capture_modality: string
+  captured_at: string | null
+  instrument_id: string | null
+  instrument_settings: Record<string, unknown> | null
+  illumination_type: string | null
+  illumination_source: string | null
+  illumination_notes: string | null
+  temperature: number | null
+  distance_to_object: number | null
+  instrument_position: string | null
+  scan_duration: number | null
+  dark_reference: boolean
+  white_reference: boolean
+  calibration_ref: string | null
+  preprocessing_notes: string | null
+  software_version: string | null
+  operator: string | null
+  exif_available: boolean
+  envi_available: boolean
+  notes: string | null
+}
+
+// ExternalInput (non-HSI import) fields — see backend ExternalInputMeta.
+export type ExternalInputMeta = {
+  title: string | null
+  source_tool: string
+  capture_modality: string
+  file_format: string
+  width: number | null
+  height_px: number | null
+  data_ref: string
+  capture_date: string | null
+  camera_model: string | null
+  instrument_id: string | null
+  operator: string | null
+  processing_steps: string | null
+  dc_rights: string | null
+  created_at: string | null
+  imported_at: string
+  notes: string | null
+  linked_dataset_id: string | null
+}
+
+// DB-stored metadata for the dataset-info tabs (acquisition + the visual's import row).
+export type DatasetDbMeta = {
+  acquisition: AcquisitionMeta | null
+  external: ExternalInputMeta | null
+}
+
+export async function getDatasetDbMeta(id: string): Promise<DatasetDbMeta> {
+  const r = await fetch(`${base}/datasets/${encodeURIComponent(id)}/db-meta`)
+  if (!r.ok) throw new Error('Failed to load dataset metadata')
+  return r.json()
+}
+
 // --- Dataset upload ---------------------------------------------------------------------
 
 export type DataKind = 'hsi' | 'visual'
