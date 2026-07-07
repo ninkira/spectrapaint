@@ -51,6 +51,7 @@ class UploadMetadata(BaseModel):
     data_kind: Literal["hsi", "visual"]
     target_modality: Literal["HSI", "XRF", "RGB", "other"]
     title: str | None = None  # user-facing display label for the dataset
+    linked_dataset_id: str | None = None  # visual belongs to / derived from this dataset
 
     # External-input basics (also reused on the acquisition where the columns overlap).
     source_tool: str | None = None
@@ -254,6 +255,7 @@ def _handle_visual(
         project_id=project_uuid,
         acquisition_id=acq.acquisition_id,
         title=(meta.title.strip() if meta.title and meta.title.strip() else None),
+        linked_dataset_id=meta.linked_dataset_id or None,
         source_tool=meta.source_tool or "user upload",
         capture_modality=meta.target_modality,
         file_format=ext.lstrip("."),

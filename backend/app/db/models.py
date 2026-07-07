@@ -218,6 +218,9 @@ class ExternalInput(Base):
         ForeignKey("data_acquisitions.acquisition_id"), nullable=True
     )
     title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
+    # dataset this input belongs to / was derived from (e.g. a PNG render of an HSI cube).
+    # Stored as the app's string dataset id (soft reference).
+    linked_dataset_id: Mapped[str | None] = mapped_column(String, nullable=True)
     source_tool: Mapped[str] = mapped_column(String)
     capture_modality: Mapped[str] = mapped_column(String)  # XRF | RGB | other
     file_format: Mapped[str] = mapped_column(String)

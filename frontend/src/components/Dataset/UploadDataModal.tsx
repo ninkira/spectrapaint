@@ -1,7 +1,16 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import InfoModal from './DatasetInfoModal'
 import { useApp } from '../../state/AppContext'
-import { uploadDataset, type DataKind, type TargetModality, type UploadMetadata } from '../../lib/api'
+import {
+  getDatasetMetadata,
+  listDatasets,
+  uploadDataset,
+  type DataKind,
+  type DatasetMeta,
+  type HsiCubeMeta,
+  type TargetModality,
+  type UploadMetadata,
+} from '../../lib/api'
 
 const VISUAL_EXT = ['.tif', '.tiff', '.png', '.jpg', '.jpeg']
 // Extensions accepted by the picker (ENVI header + common binary cube extensions + visuals).
@@ -14,6 +23,80 @@ function detectKind(name: string): DataKind | null {
   if (isHdr(name)) return 'hsi'
   if (isVisual(name)) return 'visual'
   return null
+}
+
+// Read-only ENVI header fields shown in "Source / ENVI details" — populated either from a just-
+// selected .hdr (HSI upload) or from a linked HSI dataset's metadata (a PNG render of an HSI).
+type EnviInfo = {
+  samples?: number
+  lines?: number
+  number_of_bands?: number
+  wavelength_units?: string | null
+  spectral_range_min?: number | null
+  spectral_range_max?: number | null
+  interleave?: string | null
+  data_type?: number | null
+  sensor_type?: string | null
+  description?: string | null
+}
+
+// Parse an ENVI text header ("key = value" or "key = { … }", values may span lines).
+function parseEnviHeader(text: string): Map<string, string> {
+  const map = new Map<string, string>()
+  const s = text.replace(/\r\n/g, '\n')
+  const re = /^\s*([\w /]+?)\s*=\s*(\{[\s\S]*?\}|[^\n]*)/gm
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s)) !== null) {
+    const key = m[1].trim().toLowerCase()
+    let val = m[2].trim()
+    if (val.startsWith('{')) val = val.slice(1, -1).trim()
+    map.set(key, val.trim())
+  }
+  return map
+}
+
+function enviInfoFromHeaderText(text: string): EnviInfo {
+  const m = parseEnviHeader(text)
+  const int = (k: string) => {
+    const v = m.get(k)
+    const n = v ? parseInt(v, 10) : NaN
+    return Number.isFinite(n) ? n : undefined
+  }
+  const wl = (m.get('wavelength') ?? '')
+    .split(',')
+    .map((x) => parseFloat(x.trim()))
+    .filter((x) => Number.isFinite(x))
+  const clean = (k: string) => {
+    const v = m.get(k)?.trim()
+    return v ? v : undefined
+  }
+  return {
+    samples: int('samples'),
+    lines: int('lines'),
+    number_of_bands: int('bands'),
+    wavelength_units: clean('wavelength units'),
+    spectral_range_min: wl.length ? Math.min(...wl) : undefined,
+    spectral_range_max: wl.length ? Math.max(...wl) : undefined,
+    interleave: clean('interleave')?.toUpperCase(),
+    data_type: int('data type'),
+    sensor_type: clean('sensor type'),
+    description: clean('description'),
+  }
+}
+
+function enviInfoFromCubeMeta(md: HsiCubeMeta): EnviInfo {
+  return {
+    samples: md.samples,
+    lines: md.lines,
+    number_of_bands: md.number_of_bands,
+    wavelength_units: md.wavelength_units,
+    spectral_range_min: md.spectral_range_min,
+    spectral_range_max: md.spectral_range_max,
+    interleave: md.interleave,
+    data_type: md.data_type,
+    sensor_type: md.sensor_type,
+    description: md.description,
+  }
 }
 
 const inputStyle: React.CSSProperties = {
@@ -36,6 +119,7 @@ const labelStyle: React.CSSProperties = {
 type FormState = {
   title: string
   target_modality: TargetModality
+  linked_dataset_id: string
   source_tool: string
   notes: string
   // acquisition
@@ -68,6 +152,7 @@ type FormState = {
 const INITIAL: FormState = {
   title: '',
   target_modality: 'XRF',
+  linked_dataset_id: '',
   source_tool: '',
   notes: '',
   captured_at: '',
@@ -115,9 +200,20 @@ function Field({
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
   return (
-    <details style={{ border: '1px solid #2a3445', borderRadius: 8, padding: '0.5rem 0.75rem' }}>
+    <details
+      open={defaultOpen}
+      style={{ border: '1px solid #2a3445', borderRadius: 8, padding: '0.5rem 0.75rem' }}
+    >
       <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>{title}</summary>
       <div
         style={{
@@ -130,6 +226,33 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         {children}
       </div>
     </details>
+  )
+}
+
+// Read-only label/value pair used inside "Source / ENVI details".
+function Detail({
+  label,
+  value,
+  full,
+}: {
+  label: string
+  value: React.ReactNode
+  full?: boolean
+}) {
+  const empty = value === undefined || value === null || value === ''
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.15rem',
+        fontSize: '0.8rem',
+        ...(full ? { gridColumn: '1 / -1' } : {}),
+      }}
+    >
+      <span style={{ color: '#8aa0bf' }}>{label}</span>
+      <span>{empty ? '—' : value}</span>
+    </div>
   )
 }
 
@@ -146,15 +269,53 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   const [form, setForm] = useState<FormState>(INITIAL)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [existingDatasets, setExistingDatasets] = useState<DatasetMeta[]>([])
+  const [enviInfo, setEnviInfo] = useState<EnviInfo | null>(null)
 
   const kind: DataKind | null = useMemo(
     () => (file ? detectKind(file.name) : null),
     [file],
   )
   const fileFormat = file ? file.name.split('.').pop()?.toLowerCase() ?? '' : ''
+  const linkedDataset = existingDatasets.find((d) => d.id === form.linked_dataset_id)
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
+
+  // Load the existing datasets (for the "belongs to" picker) when the modal opens.
+  useEffect(() => {
+    if (!isOpen) return
+    listDatasets().then(setExistingDatasets).catch(() => setExistingDatasets([]))
+  }, [isOpen])
+
+  // Derive the ENVI details to display: from the selected .hdr for an HSI upload, or from a linked
+  // HSI dataset when a visual (e.g. a PNG render) is linked to one.
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      if (kind === 'hsi' && file) {
+        try {
+          const text = await file.text()
+          if (!cancelled) setEnviInfo(enviInfoFromHeaderText(text))
+        } catch {
+          if (!cancelled) setEnviInfo(null)
+        }
+      } else if (kind === 'visual' && linkedDataset?.type === 'hsi') {
+        try {
+          const md = await getDatasetMetadata(linkedDataset.id)
+          if (!cancelled) setEnviInfo(enviInfoFromCubeMeta(md))
+        } catch {
+          if (!cancelled) setEnviInfo(null)
+        }
+      } else if (!cancelled) {
+        setEnviInfo(null)
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [kind, file, linkedDataset])
 
   const reset = () => {
     setFile(null)
@@ -162,6 +323,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     setForm(INITIAL)
     setError(null)
     setSubmitting(false)
+    setEnviInfo(null)
   }
 
   const close = () => {
@@ -225,6 +387,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
       data_kind: kind,
       target_modality: kind === 'hsi' ? 'HSI' : form.target_modality,
       title: form.title.trim(),
+      linked_dataset_id: kind === 'visual' ? s(form.linked_dataset_id) : undefined,
       source_tool: s(form.source_tool),
       notes: s(form.notes),
       captured_at: s(form.captured_at),
@@ -340,20 +503,37 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
         </Field>
 
         {kind === 'visual' && (
-          <Field label="This image is input to…">
-            <select
-              value={form.target_modality}
-              onChange={(e) => set('target_modality', e.target.value as TargetModality)}
-              style={inputStyle}
-            >
-              <option value="HSI">HSI</option>
-              <option value="XRF">XRF</option>
-              <option value="RGB">RGB</option>
-              <option value="other">Other</option>
-            </select>
-          </Field>
+          <>
+            <Field label="This image is input to…">
+              <select
+                value={form.target_modality}
+                onChange={(e) => set('target_modality', e.target.value as TargetModality)}
+                style={inputStyle}
+              >
+                <option value="HSI">HSI</option>
+                <option value="XRF">XRF</option>
+                <option value="RGB">RGB</option>
+                <option value="other">Other</option>
+              </select>
+            </Field>
+            <Field label="Belongs to (existing dataset)">
+              <select
+                value={form.linked_dataset_id}
+                onChange={(e) => set('linked_dataset_id', e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">— none —</option>
+                {existingDatasets.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} ({d.type})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </>
         )}
 
+       
         {/* --- Basics --- */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
           <Field label="Source tool">
@@ -378,6 +558,32 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
             style={inputStyle}
           />
         </Field>
+
+         {/* --- Source / ENVI details (from the .hdr, or from a linked HSI dataset) --- */}
+        {enviInfo && (
+          <Section title="Source / ENVI details" defaultOpen>
+            {kind === 'visual' && linkedDataset && (
+              <Detail label="Linked HSI dataset" value={linkedDataset.name} full />
+            )}
+            <Detail label="Samples (width)" value={enviInfo.samples} />
+            <Detail label="Lines (height)" value={enviInfo.lines} />
+            <Detail label="Bands" value={enviInfo.number_of_bands} />
+            <Detail label="Interleave" value={enviInfo.interleave} />
+            <Detail label="Data type" value={enviInfo.data_type} />
+            <Detail label="Wavelength units" value={enviInfo.wavelength_units} />
+            <Detail
+              label="Spectral range"
+              value={
+                enviInfo.spectral_range_min != null && enviInfo.spectral_range_max != null
+                  ? `${enviInfo.spectral_range_min} – ${enviInfo.spectral_range_max}`
+                  : undefined
+              }
+            />
+            <Detail label="Sensor type" value={enviInfo.sensor_type} />
+            <Detail label="Description" value={enviInfo.description} full />
+          </Section>
+        )}
+
 
         {/* --- Data acquisition --- */}
         <Section title="Data acquisition (capture session)">

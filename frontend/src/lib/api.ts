@@ -48,6 +48,8 @@ export type UploadMetadata = {
 
   // display name / label for the dataset
   title?: string
+  // dataset this visual belongs to / was derived from (e.g. the HSI cube behind a PNG render)
+  linked_dataset_id?: string
 
   // external-input basics
   source_tool?: string
