@@ -129,10 +129,27 @@ def get_cube_for_path(hdr_path: str) -> Tuple[np.ndarray, Dict[str, Any]]:
 
 def nearest_band_idx(wl, nm): return int(np.abs(wl - nm).argmin())
 
+
+def default_rgb_indices(n_bands: int) -> Tuple[int, int, int]:
+    """Three band indices spread across the cube (¾, ½, ¼) — a false-colour fallback used when a
+    cube has no wavelength metadata, so the R/G/B nanometre inputs can't be mapped to bands."""
+    if n_bands <= 0:
+        return (0, 0, 0)
+    last = n_bands - 1
+    pick = lambda frac: min(last, max(0, int(round(last * frac))))
+    return (pick(0.75), pick(0.5), pick(0.25))
+
+
 def extract_rgb(cube, wl, r, g, b):
     wl = np.asarray(wl, dtype=np.float32)
-    return np.stack([cube[..., nearest_band_idx(wl, r)],
-                     cube[..., nearest_band_idx(wl, g)],
-                     cube[..., nearest_band_idx(wl, b)]], axis=-1)
+    if wl.size == 0:
+        # No wavelengths in the header — fall back to evenly spread band indices so the cube
+        # still renders instead of failing on an empty-array argmin.
+        ri, gi, bi = default_rgb_indices(cube.shape[-1])
+    else:
+        ri = nearest_band_idx(wl, r)
+        gi = nearest_band_idx(wl, g)
+        bi = nearest_band_idx(wl, b)
+    return np.stack([cube[..., ri], cube[..., gi], cube[..., bi]], axis=-1)
 
 def downsample2(arr, factor=4): return arr[::factor, ::factor, ...] if factor > 1 else arr
