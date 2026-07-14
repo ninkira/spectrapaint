@@ -76,6 +76,10 @@ export default function PrimaryDisplay({
   const [probeGroupId, setProbeGroupId] = useState<string | null>(null)
   const rafId = useRef(0)
   const cachedRect = useRef<DOMRect | null>(null)
+  // Bumped when the displayed image finishes loading. Passive overlays (saved ROIs) map image
+  // coordinates via the image's natural size, which is 0 until it loads — so without this, ROIs
+  // loaded on a page refresh stay hidden until an unrelated re-render (zoom/pan/select) happens.
+  const [imgLoadTick, setImgLoadTick] = useState(0)
 
   // Keep cachedRect in sync with wrapper size
   useEffect(() => {
@@ -750,7 +754,12 @@ export default function PrimaryDisplay({
   }
 
 
-  const savedOverlay = useMemo(() => (
+  const savedOverlay = useMemo(() => {
+    // imgLoadTick is a re-render trigger (not read here): it changes when the image loads so this
+    // overlay recomputes once the image's natural size is known — otherwise ROIs fetched on a page
+    // refresh stay hidden (toDisplayCoords returns null) until an unrelated re-render.
+    void imgLoadTick
+    return (
     <svg
       style={{
         position: 'absolute',
@@ -922,7 +931,8 @@ export default function PrimaryDisplay({
           })
       })()}
     </svg>
-  ), [annotations, dataset, selectedRoiId, selectedProbePointId, navigationMode, toDisplayCoords, setSelectedProbePointId, setSelectedRoiId, setSelectedProbeGroupId])
+    )
+  }, [annotations, dataset, selectedRoiId, selectedProbePointId, navigationMode, toDisplayCoords, imgLoadTick, setSelectedProbePointId, setSelectedRoiId, setSelectedProbeGroupId])
 
   if (draftVertices && draftVertices.length > 0) {
     polygonOverlay = (
@@ -1044,6 +1054,12 @@ export default function PrimaryDisplay({
               }}
               draggable={false}
               onDragStart={(e) => e.preventDefault()}
+              onLoad={() => {
+                // The image now has its natural size and the wrapper its final rect — refresh the
+                // cached rect and trigger overlays to recompute so saved ROIs appear immediately.
+                cachedRect.current = wrapperRef.current?.getBoundingClientRect() ?? cachedRect.current
+                setImgLoadTick((t) => t + 1)
+              }}
             />
             {savedOverlay}
             {selectionOverlay}

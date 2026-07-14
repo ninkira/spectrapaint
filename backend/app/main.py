@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from .api.routes_classification import router as classification_router
 from .api.routes_datasets import router as datasets_router
 from .api.routes_spectra import router as spectra_router
+from .api.routes_upload import router as upload_router
 from .core.config import settings
 from .paths import FRONTEND_DIR
 from .startup import init_app
@@ -34,6 +35,7 @@ app.add_middleware(
 # API routes live under /api so the SAME urls work in dev (via the Vite proxy) and in the
 # packaged single-process app (where FastAPI also serves the built frontend at "/").
 app.include_router(datasets_router, prefix="/api")
+app.include_router(upload_router, prefix="/api")
 app.include_router(spectra_router, prefix="/api")
 app.include_router(classification_router, prefix="/api")
 

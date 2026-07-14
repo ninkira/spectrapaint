@@ -20,6 +20,7 @@ type Ctx = {
   dataset?: DatasetMeta;
   datasetId?: string;
   setDatasetId: (id: string) => void;
+  refreshDatasets: () => Promise<DatasetMeta[]>;
 
   //RGB
   rgbBands: { r: number; g: number; b: number };
@@ -187,12 +188,18 @@ const [dataset, setDataset] = useState<DatasetMeta>()
   }
 
 
-  useEffect(() => {
-    listDatasets().then(ds => {
-      setDatasets(ds);
-      if (ds.length) { setDataset(ds[0]); setDatasetId(ds[0].id); }
-    }).catch(console.error);
+  // Reload the dataset list from the backend (used on mount and after an upload).
+  const refreshDatasets = useCallback(async () => {
+    const ds = await listDatasets();
+    setDatasets(ds);
+    return ds;
   }, []);
+
+  useEffect(() => {
+    refreshDatasets().then(ds => {
+      if (ds.length) { setDatasetId(prev => prev ?? ds[0].id); }
+    }).catch(console.error);
+  }, [refreshDatasets]);
 
   useEffect(() => {
     if (!datasetId) return;
@@ -234,6 +241,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     dataset,
     datasetId,
     setDatasetId,
+    refreshDatasets,
 
     // RGB
     rgbBands,
@@ -287,6 +295,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     fileLayers,
     dataset,
     datasetId,
+    refreshDatasets,
     rgbBands,
     rgbImgUrl,
     selectionMode,

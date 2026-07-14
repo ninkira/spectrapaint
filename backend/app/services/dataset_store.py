@@ -1,16 +1,31 @@
-import json
+"""The in-memory dataset registry — the single map the read endpoints consume.
+
+Historically this was built by scanning the on-disk data folder. The app is now *upload-driven*:
+datasets exist because the user uploaded them through the Data Manager modal, which writes both
+the file (into APP_DATA_DIR) and a DB row (HsiCube / ExternalInput). So the registry is now built
+**from the database**. The dict shape is unchanged, so every consumer
+(routes_datasets / routes_spectra / routes_classification, all via `get_dataset_record_or_404`)
+keeps working without modification.
+
+Each record:
+    {
+      "name": str,
+      "project_id": str,
+      "project_name": str,
+      "envi_hdr": str,          # HSI cubes only  (absolute path)
+      "tiff" | "png" | "jpg": str,  # visual inputs only (absolute path)
+    }
+"""
 import re
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 
-from ..paths import APP_DATA_DIR as DATA_DIR
+from ..paths import APP_DATA_DIR
+
 PROJECT_ID = "old_man"
-PROJECT_DIR = DATA_DIR / PROJECT_ID
-PROJECT_REGISTRY_FILE = PROJECT_DIR / "registry.json"
-HSI_ROOT = PROJECT_DIR / "hsi"
-VISUAL_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+PROJECT_DIR = APP_DATA_DIR / PROJECT_ID
 
 
 def _to_title(text: str) -> str:
@@ -18,131 +33,81 @@ def _to_title(text: str) -> str:
     return clean.title() if clean else text
 
 
-def _load_project_registry() -> tuple[dict[str, Any], dict[str, Any]]:
+PROJECT_NAME = _to_title(PROJECT_ID)
+
+
+def _abs_path(data_ref: str) -> Path:
+    """Absolute path from a stored `data_ref` (relative to APP_DATA_DIR, or already absolute)."""
+    return APP_DATA_DIR / data_ref
+
+
+def _dataset_id_from_data_ref(data_ref: str) -> str:
+    """Recreate the stable dataset id from a stored path.
+
+    Mirrors the historical scheme: path relative to the project folder, without its suffix,
+    with "/" replaced by "__" (e.g. "old_man/hsi/raw/001.hdr" -> "hsi__raw__001"). Keeping the
+    same scheme means `stable_id("cube"/"input", dataset_id)` still matches the DB primary keys
+    and any annotations already linked to them.
     """
-    Supported formats:
-    1) Flat (legacy):
-       {"001": {"name": "...", ...}}
-    2) Structured:
-       {"project": {...}, "datasets": {"001": {"name": "...", ...}}}
-    """
-    if not PROJECT_REGISTRY_FILE.exists():
-        return {}, {}
-
-    with open(PROJECT_REGISTRY_FILE, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-
-    if isinstance(raw, dict) and "datasets" in raw:
-        project_meta = raw.get("project", {}) if isinstance(raw.get("project"), dict) else {}
-        datasets_meta = raw.get("datasets", {}) if isinstance(raw.get("datasets"), dict) else {}
-        return project_meta, datasets_meta
-
-    if isinstance(raw, dict):
-        return {}, raw
-
-    return {}, {}
+    rel = Path(data_ref)
+    parts = rel.parts
+    if parts and parts[0] == PROJECT_ID:
+        rel = Path(*parts[1:])
+    return rel.with_suffix("").as_posix().replace("/", "__")
 
 
-def _build_auto_registry() -> dict[str, Any]:
-    project_meta, datasets_meta = _load_project_registry()
-    project_name = project_meta.get("name", _to_title(PROJECT_ID))
+def _default_name(data_ref: str) -> str:
+    stem = Path(data_ref).stem
+    return f"{PROJECT_NAME} - {_to_title(stem)}"
+
+
+def _build_registry_from_db() -> dict[str, Any]:
+    """Assemble the registry from the HsiCube and ExternalInput tables."""
+    # Imported lazily to avoid a circular import at module load time.
+    from ..db.database import SessionLocal
+    from ..db.models import ExternalInput, HsiCube
 
     out: dict[str, Any] = {}
-    if not PROJECT_DIR.exists():
-        return out
+    with SessionLocal() as db:
+        for cube in db.query(HsiCube).all():
+            dataset_id = _dataset_id_from_data_ref(cube.data_ref)
+            out[dataset_id] = {
+                "name": cube.title or _default_name(cube.data_ref),
+                "project_id": PROJECT_ID,
+                "project_name": PROJECT_NAME,
+                "envi_hdr": str(_abs_path(cube.data_ref)),
+            }
 
-    # 1) HSI records (from the HSI source tree only).
-    for hdr_path in sorted(HSI_ROOT.rglob("*.hdr")) if HSI_ROOT.exists() else []:
-        rel = hdr_path.relative_to(PROJECT_DIR)
-        stem = hdr_path.stem
-        dataset_id = rel.with_suffix("").as_posix().replace("/", "__")
-        meta = _find_dataset_meta(datasets_meta, dataset_id, rel.with_suffix("").as_posix(), stem)
-        default_name = f"{project_name} - {_to_title(stem)}"
-
-        out[dataset_id] = {
-            "name": meta.get("name", default_name),
-            "project_id": PROJECT_ID,
-            "project_name": project_name,
-            "envi_hdr": str(hdr_path),
-            "thumbnail": meta.get("thumbnail"),
-        }
-
-    # 2) Visual records (TIFF/PNG), skip folders not intended as dataset layers.
-    for vis_path in sorted(PROJECT_DIR.rglob("*")):
-        if not vis_path.is_file():
-            continue
-        if vis_path.suffix.lower() not in VISUAL_EXTS:
-            continue
-        parts = [p.lower() for p in vis_path.relative_to(PROJECT_DIR).parts]
-        if "spectral_libraries" in parts or "testdata" in parts:
-            continue
-        if "raw" in parts:
-            continue
-
-        rel = vis_path.relative_to(PROJECT_DIR)
-        stem = vis_path.stem
-        dataset_id = rel.with_suffix("").as_posix().replace("/", "__")
-        if dataset_id in out:
-            continue
-
-        meta = _find_dataset_meta(datasets_meta, dataset_id, rel.with_suffix("").as_posix(), stem)
-        default_name = f"{project_name} - {_to_title(stem)}"
-        rec = {
-            "name": meta.get("name", default_name),
-            "project_id": PROJECT_ID,
-            "project_name": project_name,
-            "thumbnail": meta.get("thumbnail"),
-        }
-        suffix = vis_path.suffix.lower()
-        if suffix in {".tif", ".tiff"}:
-            rec["tiff"] = str(vis_path)
-        elif suffix == ".png":
-            rec["png"] = str(vis_path)
-        else:
-            rec["jpg"] = str(vis_path)
-
-        out[dataset_id] = rec
+        for inp in db.query(ExternalInput).all():
+            dataset_id = _dataset_id_from_data_ref(inp.data_ref)
+            if dataset_id in out:
+                continue
+            rec: dict[str, Any] = {
+                "name": inp.title or _default_name(inp.data_ref),
+                "project_id": PROJECT_ID,
+                "project_name": PROJECT_NAME,
+            }
+            suffix = Path(inp.data_ref).suffix.lower()
+            key = "tiff" if suffix in {".tif", ".tiff"} else "png" if suffix == ".png" else "jpg"
+            rec[key] = str(_abs_path(inp.data_ref))
+            out[dataset_id] = rec
 
     return out
 
 
-def _find_dataset_meta(
-    datasets_meta: dict[str, Any], dataset_id: str, rel_no_suffix: str, stem: str
-) -> dict[str, Any]:
-    if not isinstance(datasets_meta, dict):
-        return {}
-
-    # Supported keys in registry.json:
-    # - exact generated ID: "hsi__raw__001"
-    # - relative path w/o suffix: "hsi/raw/001" or "hsi__raw__001"
-    # - simple stem for legacy entries: "001"
-    candidates = [
-        dataset_id,
-        rel_no_suffix,
-        rel_no_suffix.replace("/", "__"),
-        stem,
-    ]
-
-    for key in candidates:
-        meta = datasets_meta.get(key)
-        if isinstance(meta, dict):
-            return meta
-    return {}
+_registry_cache: dict[str, Any] | None = None
 
 
-_registry_cache: dict[str, Any] = {}
-_registry_mtime: float = 0.0
+def invalidate_registry_cache() -> None:
+    """Drop the cache so the next `registry()` call rebuilds from the DB (call after an upload)."""
+    global _registry_cache
+    _registry_cache = None
 
 
 def registry() -> dict[str, Any]:
-    global _registry_cache, _registry_mtime
-    try:
-        current_mtime = PROJECT_REGISTRY_FILE.stat().st_mtime
-    except OSError:
-        current_mtime = 0.0
-    if current_mtime != _registry_mtime or not _registry_cache:
-        _registry_cache = _build_auto_registry()
-        _registry_mtime = current_mtime
+    global _registry_cache
+    if _registry_cache is None:
+        _registry_cache = _build_registry_from_db()
     return _registry_cache
 
 

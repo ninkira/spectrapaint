@@ -35,12 +35,145 @@ export type HsiCubeMeta = {
   header_offset: number | null
 }
 
+// DataAcquisition (capture session) fields — see backend AcquisitionMeta.
+export type AcquisitionMeta = {
+  capture_modality: string
+  captured_at: string | null
+  instrument_id: string | null
+  instrument_settings: Record<string, unknown> | null
+  illumination_type: string | null
+  illumination_source: string | null
+  illumination_notes: string | null
+  temperature: number | null
+  distance_to_object: number | null
+  instrument_position: string | null
+  scan_duration: number | null
+  dark_reference: boolean
+  white_reference: boolean
+  calibration_ref: string | null
+  preprocessing_notes: string | null
+  software_version: string | null
+  operator: string | null
+  exif_available: boolean
+  envi_available: boolean
+  notes: string | null
+}
+
+// ExternalInput (non-HSI import) fields — see backend ExternalInputMeta.
+export type ExternalInputMeta = {
+  title: string | null
+  source_tool: string
+  capture_modality: string
+  file_format: string
+  width: number | null
+  height_px: number | null
+  data_ref: string
+  capture_date: string | null
+  camera_model: string | null
+  instrument_id: string | null
+  operator: string | null
+  processing_steps: string | null
+  dc_rights: string | null
+  created_at: string | null
+  imported_at: string
+  notes: string | null
+  linked_dataset_id: string | null
+}
+
+// DB-stored metadata for the dataset-info tabs (acquisition + the visual's import row).
+export type DatasetDbMeta = {
+  acquisition: AcquisitionMeta | null
+  external: ExternalInputMeta | null
+}
+
+export async function getDatasetDbMeta(id: string): Promise<DatasetDbMeta> {
+  const r = await fetch(`${base}/datasets/${encodeURIComponent(id)}/db-meta`)
+  if (!r.ok) throw new Error('Failed to load dataset metadata')
+  return r.json()
+}
+
+// --- Dataset upload ---------------------------------------------------------------------
+
+export type DataKind = 'hsi' | 'visual'
+export type TargetModality = 'HSI' | 'XRF' | 'RGB' | 'other'
+
+// Everything the upload modal can send. Mirrors the backend UploadMetadata model; only
+// data_kind + target_modality are required, the rest are optional metadata.
+export type UploadMetadata = {
+  data_kind: DataKind
+  target_modality: TargetModality
+
+  // display name / label for the dataset
+  title?: string
+  // dataset this visual belongs to / was derived from (e.g. the HSI cube behind a PNG render)
+  linked_dataset_id?: string
+
+  // external-input basics
+  source_tool?: string
+  capture_date?: string        // EXIF
+  camera_model?: string        // EXIF
+  instrument_id?: string
+  operator?: string
+  processing_steps?: string
+  dc_rights?: string           // DC
+  created_at?: string
+  notes?: string
+
+  // data acquisition (capture session)
+  captured_at?: string
+  instrument_settings?: Record<string, unknown>
+  illumination_type?: string
+  illumination_source?: string
+  illumination_notes?: string
+  temperature?: number
+  distance_to_object?: number
+  instrument_position?: string
+  scan_duration?: number
+  dark_reference?: boolean
+  white_reference?: boolean
+  calibration_ref?: string
+  preprocessing_notes?: string
+  software_version?: string
+  exif_available?: boolean
+  envi_available?: boolean
+}
+
 const base = '/api';
 
 export async function listDatasets(): Promise<DatasetMeta[]> {
   const r = await fetch(`${base}/datasets`);
   if (!r.ok) throw new Error('Failed to list datasets');
   return r.json();
+}
+
+// Upload a dataset: `file` is the visual image, or (for HSI) the ENVI .hdr header — in which
+// case `data` must carry the binary cube. Returns the newly registered dataset.
+export async function uploadDataset(
+  meta: UploadMetadata,
+  files: { file: File; data?: File | null },
+): Promise<DatasetMeta> {
+  const form = new FormData()
+  form.append('metadata', JSON.stringify(meta))
+  form.append('file', files.file)
+  if (files.data) form.append('data', files.data)
+
+  const r = await fetch(`${base}/datasets/upload`, { method: 'POST', body: form })
+  if (!r.ok) {
+    let detail = `Upload failed (${r.status})`
+    try {
+      const body = await r.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+      else if (body?.detail) detail = JSON.stringify(body.detail)
+    } catch { /* keep default */ }
+    throw new Error(detail)
+  }
+  return r.json()
+}
+
+// Remove a dataset: deletes its file(s) and database records on the backend.
+export async function deleteDataset(id: string): Promise<void> {
+  const r = await fetch(`${base}/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(`Failed to delete ${id} (${r.status})`)
 }
 
 export async function getDatasetMetadata(id: string): Promise<HsiCubeMeta> {
