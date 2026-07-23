@@ -5,6 +5,7 @@ import {
   getDatasetMetadata,
   listDatasets,
   uploadDataset,
+  uploadSpectralLibrary,
   type DataKind,
   type DatasetMeta,
   type HsiCubeMeta,
@@ -14,7 +15,7 @@ import {
 
 const VISUAL_EXT = ['.tif', '.tiff', '.png', '.jpg', '.jpeg']
 // Extensions accepted by the picker (ENVI header + common binary cube extensions + visuals).
-const ACCEPT = '.hdr,.img,.raw,.dat,.bin,.cube,.bsq,.bil,.bip,.tif,.tiff,.png,.jpg,.jpeg'
+const ACCEPT = '.hdr,.img,.raw,.dat,.bin,.cube,.bsq,.bil,.bip,.sli,.tif,.tiff,.png,.jpg,.jpeg'
 
 const isHdr = (name: string) => name.toLowerCase().endsWith('.hdr')
 const isVisual = (name: string) => VISUAL_EXT.some((e) => name.toLowerCase().endsWith(e))
@@ -24,6 +25,50 @@ function detectKind(name: string): DataKind | null {
   if (isVisual(name)) return 'visual'
   return null
 }
+
+// A spectral library ships its data as .sli; HSI cubes use .img/.raw/etc.
+const LIB_DATA_RE = /\.sli$/i
+const CUBE_DATA_RE = /\.(img|raw|dat|bin|cube|bsq|bil|bip)$/i
+const baseName = (name: string) => name.replace(/\.[^./\\]+$/, '')
+
+type ItemKind = 'hsi' | 'visual' | 'library'
+type UploadItem = {
+  key: string
+  kind: ItemKind
+  title: string
+  modality: TargetModality // used by visuals
+  hdr?: File
+  data?: File | null // hsi binary / library .sli
+  file?: File // visual
+}
+
+// Group a flat selection (multi-file or a whole folder) into upload items: each .hdr is paired
+// with its same-stem data file (.sli -> library, .img/.raw -> HSI cube); each image is its own item.
+function groupFiles(files: File[]): UploadItem[] {
+  const items: UploadItem[] = []
+  const dataFiles = files.filter((f) => LIB_DATA_RE.test(f.name) || CUBE_DATA_RE.test(f.name))
+  const used = new Set<File>()
+  for (const hdr of files.filter((f) => isHdr(f.name))) {
+    const stem = baseName(hdr.name).toLowerCase()
+    const sibling = dataFiles.find((d) => !used.has(d) && baseName(d.name).toLowerCase() === stem)
+    if (sibling) used.add(sibling)
+    const isLib = sibling ? LIB_DATA_RE.test(sibling.name) : false
+    items.push({
+      key: `hdr:${hdr.name}`,
+      kind: isLib ? 'library' : 'hsi',
+      title: baseName(hdr.name),
+      modality: 'HSI',
+      hdr,
+      data: sibling ?? null,
+    })
+  }
+  for (const f of files.filter((f) => isVisual(f.name))) {
+    items.push({ key: `vis:${f.name}`, kind: 'visual', title: baseName(f.name), modality: 'XRF', file: f })
+  }
+  return items
+}
+
+const KIND_LABEL: Record<ItemKind, string> = { hsi: 'HSI cube', visual: 'Image', library: 'Spectral library' }
 
 // Read-only ENVI header fields shown in "Source / ENVI details" — populated either from a just-
 // selected .hdr (HSI upload) or from a linked HSI dataset's metadata (a PNG render of an HSI).
@@ -266,9 +311,11 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
 
   const [file, setFile] = useState<File | null>(null)
   const [binary, setBinary] = useState<File | null>(null)
+  const [items, setItems] = useState<UploadItem[]>([])
   const [form, setForm] = useState<FormState>(INITIAL)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [progress, setProgress] = useState<string | null>(null)
   const [existingDatasets, setExistingDatasets] = useState<DatasetMeta[]>([])
   const [enviInfo, setEnviInfo] = useState<EnviInfo | null>(null)
 
@@ -278,6 +325,11 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   )
   const fileFormat = file ? file.name.split('.').pop()?.toLowerCase() ?? '' : ''
   const linkedDataset = existingDatasets.find((d) => d.id === form.linked_dataset_id)
+
+  const singleItem = items.length === 1 ? items[0] : null
+  const batchMode = items.length > 1
+  const isLibrarySingle = singleItem?.kind === 'library'
+  const hasDatasetItems = items.some((i) => i.kind !== 'library')
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -320,9 +372,11 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   const reset = () => {
     setFile(null)
     setBinary(null)
+    setItems([])
     setForm(INITIAL)
     setError(null)
     setSubmitting(false)
+    setProgress(null)
     setEnviInfo(null)
   }
 
@@ -331,44 +385,42 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     onClose()
   }
 
-  // One picker for everything. For an HSI cube the user selects the .hdr and its binary together;
-  // we pair them up (header -> `file`, the other selected file -> `binary`).
+  const updateItem = (key: string, patch: Partial<UploadItem>) =>
+    setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)))
+
+  // One picker for everything — a few files or a whole folder. Files are grouped into items
+  // (.hdr paired with its data file, images on their own); the primary item also feeds the
+  // single-upload fields (title / ENVI details / modality) below.
   const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? [])
     setError(null)
-    if (picked.length === 0) {
-      setFile(null)
-      setBinary(null)
-      return
-    }
-    const hdr = picked.find((f) => isHdr(f.name))
-    if (hdr) {
-      setFile(hdr)
-      setBinary(picked.find((f) => f !== hdr) ?? null)
-      set('target_modality', 'HSI')
-      set('envi_available', true)
-    } else {
-      setFile(picked.find((f) => isVisual(f.name)) ?? picked[0])
-      setBinary(null)
+    const grouped = groupFiles(picked)
+    setItems(grouped)
+
+    const first = grouped[0]
+    setFile(first?.hdr ?? first?.file ?? null)
+    setBinary(first?.data ?? null)
+    if (grouped.length === 1 && first) {
+      set('title', first.title) // pre-fill the title from the filename (editable)
+      if (first.kind === 'hsi') {
+        set('target_modality', 'HSI')
+        set('envi_available', true)
+      } else if (first.kind === 'visual') {
+        set('target_modality', first.modality)
+      }
     }
   }
 
-  // Trim strings, drop empties, parse numbers/JSON — assemble the UploadMetadata payload.
-  const buildMetadata = (): UploadMetadata | { error: string } => {
-    if (!file) return { error: 'Please choose a file to upload.' }
-    if (!kind) return { error: 'Unsupported file type. Use an ENVI .hdr, or a TIFF/PNG/JPEG.' }
-    if (kind === 'hsi' && !binary) {
-      return { error: 'An ENVI cube needs its binary data file — select the .hdr and its .img/.raw together.' }
-    }
-    if (!form.title.trim()) return { error: 'Please enter a title/label for the dataset.' }
+  type SharedMeta = Omit<UploadMetadata, 'data_kind' | 'target_modality' | 'title' | 'linked_dataset_id'>
 
+  // The optional metadata shared across a batch (everything except identity/kind).
+  const buildShared = (): SharedMeta | { error: string } => {
     const s = (v: string) => (v.trim() ? v.trim() : undefined)
     const num = (v: string): number | undefined => {
       if (!v.trim()) return undefined
       const n = Number(v)
       return Number.isFinite(n) ? n : undefined
     }
-
     let settings: Record<string, unknown> | undefined
     if (form.instrument_settings.trim()) {
       try {
@@ -382,12 +434,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
         return { error: 'Instrument settings is not valid JSON.' }
       }
     }
-
-    const meta: UploadMetadata = {
-      data_kind: kind,
-      target_modality: kind === 'hsi' ? 'HSI' : form.target_modality,
-      title: form.title.trim(),
-      linked_dataset_id: kind === 'visual' ? s(form.linked_dataset_id) : undefined,
+    return {
       source_tool: s(form.source_tool),
       notes: s(form.notes),
       captured_at: s(form.captured_at),
@@ -407,23 +454,110 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
       software_version: s(form.software_version),
       operator: s(form.operator),
       exif_available: form.exif_available,
-      envi_available: kind === 'hsi' ? true : form.envi_available,
+      envi_available: form.envi_available,
       capture_date: s(form.capture_date),
       camera_model: s(form.camera_model),
       processing_steps: s(form.processing_steps),
       dc_rights: s(form.dc_rights),
       created_at: s(form.created_at),
     }
-    return meta
+  }
+
+  // Single-dataset payload (rich form): reuses the shared fields + this item's identity.
+  const buildMetadata = (): UploadMetadata | { error: string } => {
+    if (!file) return { error: 'Please choose a file to upload.' }
+    if (!kind) return { error: 'Unsupported file type. Use an ENVI .hdr, or a TIFF/PNG/JPEG.' }
+    if (kind === 'hsi' && !binary) {
+      return { error: 'An ENVI cube needs its binary data file — select the .hdr and its .img/.raw together.' }
+    }
+    if (!form.title.trim()) return { error: 'Please enter a title/label for the dataset.' }
+    const shared = buildShared()
+    if ('error' in shared) return shared
+    return {
+      ...shared,
+      data_kind: kind,
+      target_modality: kind === 'hsi' ? 'HSI' : form.target_modality,
+      title: form.title.trim(),
+      linked_dataset_id: kind === 'visual' ? (form.linked_dataset_id.trim() || undefined) : undefined,
+      envi_available: kind === 'hsi' ? true : form.envi_available,
+    }
+  }
+
+  // Upload one grouped item via the right endpoint. Returns the created dataset id (null for libraries).
+  const uploadOneItem = async (item: UploadItem, shared: SharedMeta): Promise<string | null> => {
+    if (item.kind === 'library') {
+      if (!item.hdr || !item.data) throw new Error('needs a .hdr and a .sli file')
+      await uploadSpectralLibrary(item.hdr, item.data, item.title.trim() || undefined)
+      return null
+    }
+    if (item.kind === 'hsi') {
+      if (!item.hdr || !item.data) throw new Error('needs the .hdr and its .img/.raw binary')
+      const meta: UploadMetadata = { ...shared, data_kind: 'hsi', target_modality: 'HSI', title: item.title.trim(), envi_available: true }
+      return (await uploadDataset(meta, { file: item.hdr, data: item.data })).id
+    }
+    if (!item.file) throw new Error('has no image file')
+    const meta: UploadMetadata = { ...shared, data_kind: 'visual', target_modality: item.modality, title: item.title.trim() }
+    return (await uploadDataset(meta, { file: item.file })).id
+  }
+
+  const runBatch = async () => {
+    const shared = buildShared()
+    if ('error' in shared) { setError(shared.error); return }
+    for (const it of items) {
+      if (!it.title.trim()) { setError('Every item needs a title.'); return }
+      if ((it.kind === 'hsi' || it.kind === 'library') && !it.data) {
+        setError(`"${it.title}" is missing its ${it.kind === 'library' ? '.sli' : '.img/.raw'} data file.`)
+        return
+      }
+    }
+    setSubmitting(true)
+    setError(null)
+    let lastId: string | null = null
+    const failures: string[] = []
+    for (let i = 0; i < items.length; i += 1) {
+      const it = items[i]
+      setProgress(`Uploading ${i + 1} of ${items.length}: ${it.title}`)
+      try {
+        const id = await uploadOneItem(it, shared)
+        if (id) lastId = id
+      } catch (err) {
+        failures.push(`${it.title}: ${err instanceof Error ? err.message : 'failed'}`)
+      }
+    }
+    setProgress(null)
+    await refreshDatasets()
+    if (lastId) setDatasetId(lastId)
+    if (failures.length) {
+      setError(`${failures.length} of ${items.length} item(s) failed:\n${failures.join('\n')}`)
+      setSubmitting(false)
+    } else {
+      close()
+    }
   }
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const built = buildMetadata()
-    if ('error' in built) {
-      setError(built.error)
+    if (items.length === 0) { setError('Please choose a file to upload.'); return }
+
+    if (batchMode) { await runBatch(); return }
+
+    if (isLibrarySingle) {
+      if (!file || !binary) { setError('A spectral library needs a .hdr and its .sli file.'); return }
+      if (!form.title.trim()) { setError('Please enter a name for the library.'); return }
+      setSubmitting(true)
+      setError(null)
+      try {
+        await uploadSpectralLibrary(file, binary, form.title.trim())
+        close()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Library upload failed')
+        setSubmitting(false)
+      }
       return
     }
+
+    const built = buildMetadata()
+    if ('error' in built) { setError(built.error); return }
     setSubmitting(true)
     setError(null)
     try {
@@ -465,127 +599,194 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
             style={inputStyle}
           />
           <span style={{ fontSize: '0.75rem', color: '#8aa0bf' }}>
-            For an HSI cube, select the <code>.hdr</code> and its <code>.img</code>/<code>.raw</code>{' '}
-            together.
+            Pick one dataset, several at once, or a whole folder's files. HSI cube =
+            {' '}<code>.hdr</code> + <code>.img</code>/<code>.raw</code> · spectral library =
+            {' '}<code>.hdr</code> + <code>.sli</code>.
           </span>
         </Field>
 
-        {file && !kind && (
-          <div style={{ color: '#f87171', fontSize: '0.85rem' }}>
-            Unsupported file type — choose an ENVI <code>.hdr</code> or a TIFF/PNG/JPEG.
+        {/* --- Batch: multiple items detected --- */}
+        {batchMode && (
+          <div style={{ border: '1px solid #2a3445', borderRadius: 8, padding: '0.6rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ fontSize: '0.8rem', color: '#8aa0bf' }}>
+              {items.length} items detected — titles are pre-filled from filenames. Shared metadata
+              below applies to all cubes/images.
+            </div>
+            {items.map((it) => (
+              <div key={it.key} style={{ display: 'grid', gridTemplateColumns: '7rem 1fr 6rem', gap: '0.5rem', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.72rem', color: '#93c5fd', border: '1px solid #3b82f6', borderRadius: 6, padding: '0.1rem 0.4rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                  {KIND_LABEL[it.kind]}
+                </span>
+                <input
+                  type="text"
+                  value={it.title}
+                  onChange={(e) => updateItem(it.key, { title: e.target.value })}
+                  style={{ ...inputStyle, padding: '0.35rem 0.5rem' }}
+                />
+                {it.kind === 'visual' ? (
+                  <select
+                    value={it.modality}
+                    onChange={(e) => updateItem(it.key, { modality: e.target.value as TargetModality })}
+                    style={{ ...inputStyle, padding: '0.35rem 0.5rem' }}
+                  >
+                    <option value="HSI">HSI</option>
+                    <option value="XRF">XRF</option>
+                    <option value="RGB">RGB</option>
+                    <option value="other">Other</option>
+                  </select>
+                ) : (
+                  <span style={{ fontSize: '0.72rem', color: it.data ? '#8aa0bf' : '#f87171', textAlign: 'center' }}>
+                    {it.data ? (it.kind === 'library' ? '.sli ✓' : 'binary ✓') : 'no data'}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
-        {kind === 'hsi' && (
-          <div style={{ fontSize: '0.82rem', color: '#8aa0bf' }}>
-            Detected an ENVI cube → registered as <strong>HSI</strong>.<br />
-            Header: <code>{file?.name}</code> · Binary:{' '}
-            {binary ? (
-              <code>{binary.name}</code>
-            ) : (
-              <span style={{ color: '#f87171' }}>missing — also select the .img/.raw file</span>
-            )}
-            <br />
-            Dimensions, wavelengths, interleave and the other ENVI header fields are read
-            automatically.
-          </div>
-        )}
-
-        {/* --- Title --- */}
-        <Field label="Title / label" required>
-          <input
-            type="text"
-            value={form.title}
-            onChange={(e) => set('title', e.target.value)}
-            placeholder="A name for this dataset"
-            style={inputStyle}
-          />
-        </Field>
-
-        {kind === 'visual' && (
+        {/* --- Single spectral library --- */}
+        {isLibrarySingle && (
           <>
-            <Field label="This image is input to…">
-              <select
-                value={form.target_modality}
-                onChange={(e) => set('target_modality', e.target.value as TargetModality)}
+            <div style={{ fontSize: '0.82rem', color: '#8aa0bf' }}>
+              Detected a <strong>spectral library</strong> (reference data for classification).<br />
+              Header: <code>{singleItem?.hdr?.name}</code> · Data:{' '}
+              {singleItem?.data ? (
+                <code>{singleItem.data.name}</code>
+              ) : (
+                <span style={{ color: '#f87171' }}>missing — also select the .sli file</span>
+              )}
+            </div>
+            <Field label="Library name" required>
+              <input
+                type="text"
+                value={form.title}
+                onChange={(e) => set('title', e.target.value)}
+                placeholder="A name for this library"
                 style={inputStyle}
-              >
-                <option value="HSI">HSI</option>
-                <option value="XRF">XRF</option>
-                <option value="RGB">RGB</option>
-                <option value="other">Other</option>
-              </select>
-            </Field>
-            <Field label="Belongs to (existing dataset)">
-              <select
-                value={form.linked_dataset_id}
-                onChange={(e) => set('linked_dataset_id', e.target.value)}
-                style={inputStyle}
-              >
-                <option value="">— none —</option>
-                {existingDatasets.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} ({d.type})
-                  </option>
-                ))}
-              </select>
+              />
             </Field>
           </>
         )}
 
-       
-        {/* --- Basics --- */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
-          <Field label="Source tool">
-            <input
-              type="text"
-              value={form.source_tool}
-              onChange={(e) => set('source_tool', e.target.value)}
-              placeholder="e.g. Specim Lumo, PyMca"
-              style={inputStyle}
-            />
-          </Field>
-          <Field label="File format">
-            <input type="text" value={fileFormat} readOnly style={{ ...inputStyle, opacity: 0.6 }} />
-          </Field>
-        </div>
-
-        <Field label="Notes">
-          <textarea
-            value={form.notes}
-            onChange={(e) => set('notes', e.target.value)}
-            rows={2}
-            style={inputStyle}
-          />
-        </Field>
-
-         {/* --- Source / ENVI details (from the .hdr, or from a linked HSI dataset) --- */}
-        {enviInfo && (
-          <Section title="Source / ENVI details" defaultOpen>
-            {kind === 'visual' && linkedDataset && (
-              <Detail label="Linked HSI dataset" value={linkedDataset.name} full />
+        {/* --- Single dataset (rich form) --- */}
+        {singleItem && !isLibrarySingle && (
+          <>
+            {kind === 'hsi' && (
+              <div style={{ fontSize: '0.82rem', color: '#8aa0bf' }}>
+                Detected an ENVI cube → registered as <strong>HSI</strong>.<br />
+                Header: <code>{file?.name}</code> · Binary:{' '}
+                {binary ? (
+                  <code>{binary.name}</code>
+                ) : (
+                  <span style={{ color: '#f87171' }}>missing — also select the .img/.raw file</span>
+                )}
+                <br />
+                Dimensions, wavelengths, interleave and the other ENVI header fields are read
+                automatically.
+              </div>
             )}
-            <Detail label="Samples (width)" value={enviInfo.samples} />
-            <Detail label="Lines (height)" value={enviInfo.lines} />
-            <Detail label="Bands" value={enviInfo.number_of_bands} />
-            <Detail label="Interleave" value={enviInfo.interleave} />
-            <Detail label="Data type" value={enviInfo.data_type} />
-            <Detail label="Wavelength units" value={enviInfo.wavelength_units} />
-            <Detail
-              label="Spectral range"
-              value={
-                enviInfo.spectral_range_min != null && enviInfo.spectral_range_max != null
-                  ? `${enviInfo.spectral_range_min} – ${enviInfo.spectral_range_max}`
-                  : undefined
-              }
-            />
-            <Detail label="Sensor type" value={enviInfo.sensor_type} />
-            <Detail label="Description" value={enviInfo.description} full />
-          </Section>
+
+            <Field label="Title / label" required>
+              <input
+                type="text"
+                value={form.title}
+                onChange={(e) => set('title', e.target.value)}
+                placeholder="A name for this dataset"
+                style={inputStyle}
+              />
+            </Field>
+
+            {kind === 'visual' && (
+              <>
+                <Field label="This image is input to…">
+                  <select
+                    value={form.target_modality}
+                    onChange={(e) => set('target_modality', e.target.value as TargetModality)}
+                    style={inputStyle}
+                  >
+                    <option value="HSI">HSI</option>
+                    <option value="XRF">XRF</option>
+                    <option value="RGB">RGB</option>
+                    <option value="other">Other</option>
+                  </select>
+                </Field>
+                <Field label="Belongs to (existing dataset)">
+                  <select
+                    value={form.linked_dataset_id}
+                    onChange={(e) => set('linked_dataset_id', e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">— none —</option>
+                    {existingDatasets.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} ({d.type})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </>
+            )}
+
+            {enviInfo && (
+              <Section title="Source / ENVI details" defaultOpen>
+                {kind === 'visual' && linkedDataset && (
+                  <Detail label="Linked HSI dataset" value={linkedDataset.name} full />
+                )}
+                <Detail label="Samples (width)" value={enviInfo.samples} />
+                <Detail label="Lines (height)" value={enviInfo.lines} />
+                <Detail label="Bands" value={enviInfo.number_of_bands} />
+                <Detail label="Interleave" value={enviInfo.interleave} />
+                <Detail label="Data type" value={enviInfo.data_type} />
+                <Detail label="Wavelength units" value={enviInfo.wavelength_units} />
+                <Detail
+                  label="Spectral range"
+                  value={
+                    enviInfo.spectral_range_min != null && enviInfo.spectral_range_max != null
+                      ? `${enviInfo.spectral_range_min} – ${enviInfo.spectral_range_max}`
+                      : undefined
+                  }
+                />
+                <Detail label="Sensor type" value={enviInfo.sensor_type} />
+                <Detail label="Description" value={enviInfo.description} full />
+              </Section>
+            )}
+          </>
+        )}
+
+        {/* --- Shared dataset basics (single dataset or a batch containing datasets) --- */}
+        {hasDatasetItems && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
+              <Field label="Source tool">
+                <input
+                  type="text"
+                  value={form.source_tool}
+                  onChange={(e) => set('source_tool', e.target.value)}
+                  placeholder="e.g. Specim Lumo, PyMca"
+                  style={inputStyle}
+                />
+              </Field>
+              {!batchMode && (
+                <Field label="File format">
+                  <input type="text" value={fileFormat} readOnly style={{ ...inputStyle, opacity: 0.6 }} />
+                </Field>
+              )}
+            </div>
+
+            <Field label="Notes">
+              <textarea
+                value={form.notes}
+                onChange={(e) => set('notes', e.target.value)}
+                rows={2}
+                style={inputStyle}
+              />
+            </Field>
+          </>
         )}
 
 
-        {/* --- Data acquisition --- */}
+        {/* --- Data acquisition (applies to dataset uploads, not libraries) --- */}
+        {hasDatasetItems && (
         <Section title="Data acquisition (capture session)">
           <Field label="Captured at">
             <input
@@ -739,9 +940,10 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
             ENVI available
           </label>
         </Section>
+        )}
 
-        {/* --- Source / EXIF (visual only) --- */}
-        {kind !== 'hsi' && (
+        {/* --- Source / EXIF (single visual dataset only) --- */}
+        {singleItem && !isLibrarySingle && kind === 'visual' && (
           <Section title="Source / EXIF details">
             <Field label="Capture date">
               <input
@@ -787,7 +989,8 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
           </Section>
         )}
 
-        {error && <div style={{ color: '#b91c1c', fontSize: '0.85rem' }}>{error}</div>}
+        {progress && <div style={{ color: '#8aa0bf', fontSize: '0.85rem' }}>{progress}</div>}
+        {error && <div style={{ color: '#f87171', fontSize: '0.85rem', whiteSpace: 'pre-line' }}>{error}</div>}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
           <button type="button" className="btn btn-secondary" onClick={close} disabled={submitting}>
@@ -796,9 +999,20 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={submitting || !file || !form.title.trim() || (kind === 'hsi' && !binary)}
+            disabled={
+              submitting ||
+              items.length === 0 ||
+              (!batchMode && isLibrarySingle && (!form.title.trim() || !binary)) ||
+              (!batchMode && !isLibrarySingle && (!file || !form.title.trim() || (kind === 'hsi' && !binary)))
+            }
           >
-            {submitting ? 'Uploading…' : 'Upload'}
+            {submitting
+              ? 'Uploading…'
+              : batchMode
+                ? `Upload ${items.length} items`
+                : isLibrarySingle
+                  ? 'Upload library'
+                  : 'Upload'}
           </button>
         </div>
       </form>

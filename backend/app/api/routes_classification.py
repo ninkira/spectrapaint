@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from spectral import io as spyio
@@ -45,6 +45,73 @@ def list_methods():
 @router.get("/classification/libraries")
 def list_libraries():
     return {"libraries": list_reference_libraries()}
+
+
+def _safe_lib_stem(name: str) -> str:
+    stem = Path(name).stem
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("_")
+    return cleaned or "library"
+
+
+def _write_upload(upload: UploadFile, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(upload.file.read())
+
+
+@router.post("/classification/libraries/upload")
+def upload_library(
+    header: UploadFile = File(...),
+    data: UploadFile = File(...),
+    name: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Register a reference spectral library (ENVI .hdr + .sli/.img) so classification can use it.
+
+    Saved under old_man/spectral_libraries/<name>/ where list_reference_libraries() scans, so it
+    becomes selectable immediately. The DB SpectralLibrary row is upserted best-effort.
+    """
+    if not (header.filename or "").lower().endswith(".hdr"):
+        raise HTTPException(status_code=400, detail="The header must be an ENVI .hdr file")
+    data_ext = Path(data.filename or "").suffix.lower()
+    # The library scanner only looks for a sibling .sli or .img, so normalise to one of those.
+    out_ext = ".img" if data_ext == ".img" else ".sli"
+
+    stem = _safe_lib_stem(name or header.filename or "library")
+    folder = APP_DATA_DIR / "old_man" / "spectral_libraries" / stem
+    hdr_path = folder / f"{stem}.hdr"
+    data_path = folder / f"{stem}{out_ext}"
+
+    _write_upload(header, hdr_path)
+    _write_upload(data, data_path)
+
+    try:
+        spyio.envi.open(str(hdr_path), str(data_path))
+    except Exception as exc:
+        hdr_path.unlink(missing_ok=True)
+        data_path.unlink(missing_ok=True)
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail=f"Could not read the spectral library: {exc}") from exc
+
+    # Look the library back up so its id/label match exactly what the scanner produces.
+    lib = next(
+        (item for item in list_reference_libraries() if Path(item["hdr_path"]) == hdr_path),
+        None,
+    )
+    if lib is None:
+        raise HTTPException(status_code=500, detail="Library saved but could not be registered")
+
+    try:
+        upsert_spectral_library(db, lib)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to upsert SpectralLibrary row (library still usable from disk)")
+
+    return {"id": lib["id"], "label": lib["label"]}
 
 
 class MeanSignal(BaseModel):

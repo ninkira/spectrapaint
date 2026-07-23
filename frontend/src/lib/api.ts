@@ -146,6 +146,29 @@ export async function listDatasets(): Promise<DatasetMeta[]> {
   return r.json();
 }
 
+// Upload a reference spectral library (ENVI .hdr + .sli/.img). It lands in the spectral_libraries
+// folder the classifier scans, so it becomes selectable immediately. Not a dataset.
+export async function uploadSpectralLibrary(
+  header: File,
+  data: File,
+  name?: string,
+): Promise<{ id: string; label: string }> {
+  const form = new FormData()
+  form.append('header', header)
+  form.append('data', data)
+  if (name) form.append('name', name)
+  const r = await fetch(`${base}/classification/libraries/upload`, { method: 'POST', body: form })
+  if (!r.ok) {
+    let detail = `Library upload failed (${r.status})`
+    try {
+      const body = await r.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+    } catch { /* keep default */ }
+    throw new Error(detail)
+  }
+  return r.json()
+}
+
 // Upload a dataset: `file` is the visual image, or (for HSI) the ENVI .hdr header — in which
 // case `data` must carry the binary cube. Returns the newly registered dataset.
 export async function uploadDataset(
