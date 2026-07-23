@@ -201,9 +201,10 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
   display:flex; flex-direction:column; align-items:center; gap:10px; padding:10px 6px;
 }
 .nav-btn{
-  width:40px; height:40px; display:grid; place-items:center;
+  width:40px; height:40px; padding:0; display:grid; place-items:center;
   border:1px solid transparent; border-radius:10px; color:var(--muted);
 }
+.nav-btn svg{display:block}
 .nav-btn:hover{background:#151c27; border-color:var(--border); color:var(--ink)}
 
 /* Layer Manager */
