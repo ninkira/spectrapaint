@@ -162,6 +162,23 @@ def test_pipeline_records_the_provenance_chain(client, db, hsi, library):
     assert len(derived.class_names) == 3
 
 
+def test_deleting_the_dataset_unwinds_the_provenance_chain(client, db, hsi, library):
+    """Deleting a dataset must unwind ROI -> extraction without tripping the operation's FK."""
+    roi_id = str(uuid.uuid4())
+    client.put(f"/api/datasets/{hsi['id']}/annotations", json={"annotations": [{
+        "id": roi_id, "kind": "region", "type": "rect",
+        "geometry": {"x": 0, "y": 0, "w": 2, "h": 2},
+    }]})
+    run_pipeline(client, hsi["id"], library["id"], roi_id=roi_id)
+    assert db.query(SpectralExtraction).count() == 1
+
+    assert client.delete(f"/api/datasets/{hsi['id']}").status_code == 200
+
+    db.expire_all()
+    assert db.query(SpectralExtraction).count() == 0
+    assert db.query(ProcessingOperation).one().input_extraction_id is None  # run history survives
+
+
 def test_pipeline_rejects_an_unknown_method(client, hsi, library):
     assert run_pipeline(client, hsi["id"], library["id"], method="nope").status_code == 400
 

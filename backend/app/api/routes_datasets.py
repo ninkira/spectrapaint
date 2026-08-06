@@ -331,17 +331,10 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
         .filter(RoiAnnotation.dataset_id == dataset_id).all()
     ]
     if roi_ids:
-        ext_ids = [
-            r[0] for r in db.query(SpectralExtraction.extraction_id)
-            .filter(SpectralExtraction.roi_id.in_(roi_ids)).all()
-        ]
-        if ext_ids:
-            db.query(ProcessingOperation).filter(
-                ProcessingOperation.input_extraction_id.in_(ext_ids)
-            ).update({ProcessingOperation.input_extraction_id: None}, synchronize_session=False)
-            db.query(SpectralExtraction).filter(
-                SpectralExtraction.extraction_id.in_(ext_ids)
-            ).delete(synchronize_session=False)
+        _detach_operations_from_roi_extractions(db, roi_ids)
+        db.query(SpectralExtraction).filter(
+            SpectralExtraction.roi_id.in_(roi_ids)
+        ).delete(synchronize_session=False)
         db.query(RoiAnnotation).filter(
             RoiAnnotation.roi_id.in_(roi_ids)
         ).delete(synchronize_session=False)
@@ -471,13 +464,16 @@ def _geometry_to_svg(ann: dict) -> str:
     return json.dumps({"type": shape, "geometry": geom})  # fallback: keep it, non-SVG
 
 
-def _build_roi_row(dataset_id: str, ann: dict, cube: "HsiCube | None") -> RoiAnnotation:
+def _roi_column_values(dataset_id: str, ann: dict, cube: "HsiCube | None") -> tuple[uuid.UUID, dict]:
     """Map a frontend annotation object onto the WADM RoiAnnotation columns.
 
     When the dataset is an HSI cube present in the DB, the annotation is linked to it via the
     `cube_id` FK and the WADM `target` becomes the cube IRI `urn:uuid:{cube_id}`. The full
     original object is also stored in `data` so the UI round-trips losslessly (WADM has no slot
     for structured geometry, colour, group id, etc.).
+
+    Returns the ROI id separately from the column payload so the same mapping can either build
+    a new row or be applied on top of an existing one.
     """
     item = dict(ann)
     item["datasetId"] = dataset_id
@@ -491,37 +487,84 @@ def _build_roi_row(dataset_id: str, ann: dict, cube: "HsiCube | None") -> RoiAnn
     now = datetime.now(timezone.utc)
     cube_id = cube.cube_id if cube is not None else None
     target = f"urn:uuid:{cube_id}" if cube_id is not None else dataset_id
-    return RoiAnnotation(
-        roi_id=roi_id,
-        selector_type="SvgSelector",
-        selector_value=_geometry_to_svg(item),
-        target=target,
-        dataset_id=dataset_id,
-        cube_id=cube_id,
-        body=body,
-        body_format="text/plain" if body else None,
-        motivation=_motivation_to_str(item),
-        creator=item.get("creator"),
-        created=_parse_dt(item.get("createdAt")) or now,
-        modified=_parse_dt(item.get("updatedAt")),
-        generator="SpectraPaint",
-        generated=now,
-        data=item,
-    )
+    return roi_id, {
+        "selector_type": "SvgSelector",
+        "selector_value": _geometry_to_svg(item),
+        "target": target,
+        "dataset_id": dataset_id,
+        "cube_id": cube_id,
+        "body": body,
+        "body_format": "text/plain" if body else None,
+        "motivation": _motivation_to_str(item),
+        "creator": item.get("creator"),
+        "created": _parse_dt(item.get("createdAt")) or now,
+        "modified": _parse_dt(item.get("updatedAt")),
+        "generator": "SpectraPaint",
+        "generated": now,
+        "data": item,
+    }
+
+
+def _detach_operations_from_roi_extractions(db: Session, roi_ids: list[uuid.UUID]) -> None:
+    """Unlink classification runs from the extractions of ROIs that are about to be deleted.
+
+    A ProcessingOperation points at the SpectralExtraction it consumed. Removing the extraction
+    would otherwise trip that foreign key, so the run is detached first — the history row itself
+    survives, which is the whole reason for keeping it.
+    """
+    if not roi_ids:
+        return
+    ext_ids = [
+        r[0] for r in db.query(SpectralExtraction.extraction_id)
+        .filter(SpectralExtraction.roi_id.in_(roi_ids)).all()
+    ]
+    if not ext_ids:
+        return
+    db.query(ProcessingOperation).filter(
+        ProcessingOperation.input_extraction_id.in_(ext_ids)
+    ).update({ProcessingOperation.input_extraction_id: None}, synchronize_session=False)
 
 
 def _replace_dataset_annotations(db: Session, dataset_id: str, annotations: list[dict]) -> int:
-    """Replace all annotations for a dataset with the given list (mirrors old file semantics)."""
-    db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == dataset_id).delete()
+    """Make the stored annotations for a dataset match `annotations`.
+
+    A diff keyed on `roi_id` rather than a delete-and-recreate, for two reasons. A bulk delete
+    bypasses the ORM cascade to SpectralExtraction, and with `PRAGMA foreign_keys=ON` the
+    orphaned extraction then blocks the delete outright. And rebuilding every row on each save
+    would discard the WADM `created` timestamp plus the extraction a saved ROI had triggered,
+    even for annotations the user never touched.
+    """
+    existing = {
+        row.roi_id: row
+        for row in db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == dataset_id)
+    }
     cube = db.get(HsiCube, stable_id("cube", dataset_id))  # None for non-HSI / unsynced datasets
-    count = 0
+
+    seen: set[uuid.UUID] = set()
     for ann in annotations:
         if not isinstance(ann, dict):
             continue
-        db.add(_build_roi_row(dataset_id, ann, cube))
-        count += 1
+        roi_id, values = _roi_column_values(dataset_id, ann, cube)
+        if roi_id in seen:
+            continue  # the payload listed one id twice; first occurrence wins
+        seen.add(roi_id)
+
+        row = existing.get(roi_id)
+        if row is None:
+            db.add(RoiAnnotation(roi_id=roi_id, **values))
+            continue
+        # `created` is the WADM creation time and belongs to the original row, not this save.
+        del values["created"]
+        for column, value in values.items():
+            setattr(row, column, value)
+
+    removed = [roi_id for roi_id in existing if roi_id not in seen]
+    _detach_operations_from_roi_extractions(db, removed)
+    for roi_id in removed:
+        db.delete(existing[roi_id])  # ORM delete, so the cascade to SpectralExtraction fires
+
     db.commit()
-    return count
+    return len(seen)
 
 
 @router.get("/datasets/{id}/annotations")

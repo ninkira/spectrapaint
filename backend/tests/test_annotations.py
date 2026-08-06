@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from app.db.models import RoiAnnotation, SpectralExtraction
+from app.db.models import ProcessingOperation, RoiAnnotation, SpectralExtraction
 from app.db.ids import stable_id
 
 
@@ -99,28 +99,97 @@ def test_legacy_json_annotations_are_imported_on_first_read(client, hsi):
     assert imported[0]["title"] == "Darkened blue area"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known bug (plan W3-1): _replace_dataset_annotations issues a BULK delete, which "
-        "bypasses the ORM cascade to SpectralExtraction. With PRAGMA foreign_keys=ON the "
-        "orphaned extraction row blocks the delete. Remove this marker when the PUT endpoint "
-        "becomes a diff-based upsert."
-    ),
-)
-def test_re_saving_an_annotation_that_has_an_extraction_does_not_fail(client, db, hsi):
-    annotation = rect_annotation()
-    put_annotations(client, hsi["id"], [annotation])
-
-    roi_id = uuid.UUID(annotation["id"])
-    db.add(SpectralExtraction(
+def add_extraction(db, annotation: dict) -> SpectralExtraction:
+    """Attach a SpectralExtraction to a saved ROI, as running a classification would."""
+    extraction = SpectralExtraction(
         extraction_id=stable_id("extraction", annotation["id"]),
-        roi_id=roi_id,
+        roi_id=uuid.UUID(annotation["id"]),
         mean_spectrum=[1.0, 2.0],
         std_spectrum=[0.1, 0.2],
         pixel_count=4,
-    ))
+    )
+    db.add(extraction)
     db.commit()
+    return extraction
+
+
+def test_re_saving_an_annotation_that_has_an_extraction_does_not_fail(client, db, hsi):
+    """Regression: a bulk delete here bypassed the ORM cascade and tripped the FK constraint."""
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+    add_extraction(db, annotation)
 
     assert put_annotations(client, hsi["id"], [annotation]).status_code == 200
     assert db.query(SpectralExtraction).count() == 1
+
+
+def test_editing_an_annotation_keeps_its_extraction(client, db, hsi):
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+    add_extraction(db, annotation)
+
+    annotation["title"] = "Renamed region"
+    put_annotations(client, hsi["id"], [annotation])
+
+    db.expire_all()
+    assert db.query(RoiAnnotation).one().body == "Renamed region"
+    assert db.query(SpectralExtraction).count() == 1
+
+
+def test_editing_an_annotation_preserves_its_created_timestamp(client, db, hsi):
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+    created = db.query(RoiAnnotation).one().created
+
+    annotation["title"] = "Second thoughts"
+    put_annotations(client, hsi["id"], [annotation])
+
+    db.expire_all()
+    row = db.query(RoiAnnotation).one()
+    assert row.created == created  # WADM `created` belongs to the original, not to this save
+    assert row.body == "Second thoughts"
+
+
+def test_removing_an_annotation_deletes_its_extraction(client, db, hsi):
+    keep, drop = rect_annotation(), rect_annotation()
+    put_annotations(client, hsi["id"], [keep, drop])
+    add_extraction(db, drop)
+
+    put_annotations(client, hsi["id"], [keep])
+
+    db.expire_all()
+    assert [r.roi_id for r in db.query(RoiAnnotation).all()] == [uuid.UUID(keep["id"])]
+    assert db.query(SpectralExtraction).count() == 0
+
+
+def test_removing_an_annotation_keeps_the_classification_run_that_used_it(client, db, hsi):
+    """The extraction goes, but the ProcessingOperation is detached rather than deleted."""
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+    extraction = add_extraction(db, annotation)
+    db.add(ProcessingOperation(
+        operation_id=uuid.uuid4(),
+        operation_type="classification",
+        method_name="klpd",
+        parameters={},
+        software_version="SpectraPaint",
+        input_extraction_id=extraction.extraction_id,
+    ))
+    db.commit()
+
+    assert put_annotations(client, hsi["id"], []).status_code == 200
+
+    db.expire_all()
+    assert db.query(SpectralExtraction).count() == 0
+    operation = db.query(ProcessingOperation).one()  # history survives
+    assert operation.input_extraction_id is None
+
+
+def test_duplicate_ids_in_one_payload_are_collapsed(client, db, hsi):
+    roi_id = str(uuid.uuid4())
+    response = put_annotations(client, hsi["id"], [
+        rect_annotation(roi_id, title="first"),
+        rect_annotation(roi_id, title="second"),
+    ])
+    assert response.json()["count"] == 1
+    assert db.query(RoiAnnotation).one().body == "first"
