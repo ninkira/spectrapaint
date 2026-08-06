@@ -41,13 +41,15 @@ def _abs_path(data_ref: str) -> Path:
     return APP_DATA_DIR / data_ref
 
 
-def _dataset_id_from_data_ref(data_ref: str) -> str:
-    """Recreate the stable dataset id from a stored path.
+def dataset_id_for_data_ref(data_ref: str) -> str:
+    """Derive a dataset id from a stored path, for rows that do not have one yet.
 
-    Mirrors the historical scheme: path relative to the project folder, without its suffix,
-    with "/" replaced by "__" (e.g. "old_man/hsi/raw/001.hdr" -> "hsi__raw__001"). Keeping the
-    same scheme means `stable_id("cube"/"input", dataset_id)` still matches the DB primary keys
-    and any annotations already linked to them.
+    Path relative to the project folder, without its suffix, with "/" replaced by "__"
+    (e.g. "old_man/hsi/raw/001.hdr" -> "hsi__raw__001").
+
+    This is now only a fallback. The id is a stored column (see the `dataset_identity`
+    migration) precisely because `stable_id("cube"/"input", dataset_id)` derives each row's
+    primary key from it — recomputing it on every read welded the key to the path scheme.
     """
     rel = Path(data_ref)
     parts = rel.parts
@@ -70,7 +72,7 @@ def _build_registry_from_db() -> dict[str, Any]:
     out: dict[str, Any] = {}
     with SessionLocal() as db:
         for cube in db.query(HsiCube).all():
-            dataset_id = _dataset_id_from_data_ref(cube.data_ref)
+            dataset_id = cube.dataset_id or dataset_id_for_data_ref(cube.data_ref)
             out[dataset_id] = {
                 "name": cube.title or _default_name(cube.data_ref),
                 "project_id": PROJECT_ID,
@@ -79,7 +81,7 @@ def _build_registry_from_db() -> dict[str, Any]:
             }
 
         for inp in db.query(ExternalInput).all():
-            dataset_id = _dataset_id_from_data_ref(inp.data_ref)
+            dataset_id = inp.dataset_id or dataset_id_for_data_ref(inp.data_ref)
             if dataset_id in out:
                 continue
             rec: dict[str, Any] = {

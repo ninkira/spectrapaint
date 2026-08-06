@@ -1,7 +1,11 @@
 """Dataset ingestion, listing, metadata and rendering endpoints."""
 from __future__ import annotations
 
+from sqlalchemy import text
+
+from app.db.ids import stable_id
 from app.db.models import DataAcquisition, ExternalInput, HsiCube, Project
+from app.services.dataset_store import invalidate_registry_cache
 
 from conftest import is_png, open_image, upload_hsi, upload_visual, write_envi_cube, write_png
 
@@ -105,3 +109,43 @@ def test_delete_dataset_removes_row_and_file(client, db, hsi):
 
 def test_unknown_dataset_is_404(client):
     assert client.get("/api/datasets/nope/metadata").status_code == 404
+
+
+def test_dataset_id_is_stored_on_the_row(client, db, hsi, visual):
+    assert db.query(HsiCube).one().dataset_id == hsi["id"]
+    assert db.query(ExternalInput).one().dataset_id == visual["id"]
+
+
+def test_stored_dataset_id_still_derives_the_primary_key(client, db, hsi, visual):
+    """The invariant the dataset_identity migration exists to protect.
+
+    stable_id() turns the string id into the row's UUID primary key. If a stored id ever stops
+    matching, lookups return None silently — annotations lose their cube link and DELETE stops
+    deleting, with nothing raised.
+    """
+    cube = db.query(HsiCube).one()
+    external = db.query(ExternalInput).one()
+    assert cube.cube_id == stable_id("cube", cube.dataset_id)
+    assert external.input_id == stable_id("input", external.dataset_id)
+
+
+def test_registry_uses_the_stored_id_not_the_path(client, db, hsi):
+    """Renaming the stored id must move the dataset, proving the path is no longer consulted."""
+    db.query(HsiCube).one()  # ensure the row exists before we mutate it
+    db.execute(
+        text("UPDATE hsi_cubes SET dataset_id = :new WHERE dataset_id = :old"),
+        {"new": "renamed__cube", "old": hsi["id"]},
+    )
+    db.commit()
+    invalidate_registry_cache()
+
+    assert [item["id"] for item in client.get("/api/datasets").json()] == ["renamed__cube"]
+
+
+def test_registry_falls_back_to_the_path_when_the_id_is_missing(client, db, hsi):
+    """A row predating the backfill still resolves rather than vanishing from the listing."""
+    db.execute(text("UPDATE hsi_cubes SET dataset_id = NULL"))
+    db.commit()
+    invalidate_registry_cache()
+
+    assert [item["id"] for item in client.get("/api/datasets").json()] == [hsi["id"]]

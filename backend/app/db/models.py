@@ -103,6 +103,10 @@ class HsiCube(Base):
     cube_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     acquisition_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("data_acquisitions.acquisition_id"))
     data_ref: Mapped[str] = mapped_column(String)  # path to the cube, relative to APP_DATA_DIR
+    # The app's string dataset id. Stored rather than re-derived from data_ref on every read:
+    # `stable_id("cube", dataset_id)` must keep reproducing this row's primary key, so the id has
+    # to be a stored fact that a later refactor of the path scheme cannot silently change.
+    dataset_id: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
     checksum: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -217,6 +221,8 @@ class ExternalInput(Base):
     acquisition_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("data_acquisitions.acquisition_id"), nullable=True
     )
+    # See HsiCube.dataset_id — same reasoning.
+    dataset_id: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
     # dataset this input belongs to / was derived from (e.g. a PNG render of an HSI cube).
     # Stored as the app's string dataset id (soft reference).
