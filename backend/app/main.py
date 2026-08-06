@@ -13,6 +13,10 @@ from .core.config import settings
 from .paths import FRONTEND_DIR
 from .startup import init_app
 
+# Importing the package is what populates the plug-in registries — this is the composition
+# root, so it happens once, here, before any route can ask a registry for anything.
+from . import plugins  # noqa: F401
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

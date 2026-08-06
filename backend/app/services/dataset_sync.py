@@ -12,7 +12,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 from spectral import io as spyio
 
-from ..paths import APP_DATA_DIR
+from ..paths import storage
 from ..analysis.classification.reference_registry import list_reference_libraries
 from ..services.cube_loader import open_envi, read_metadata
 from ..services.dataset_store import registry
@@ -20,14 +20,6 @@ from ..db.ids import stable_id
 from ..db.models import Artefact, DataAcquisition, ExternalInput, HsiCube, Project, SpectralLibrary
 
 logger = logging.getLogger(__name__)
-
-
-def _rel(path: str) -> str:
-    """Path relative to APP_DATA_DIR (portable), or the original path if it's outside."""
-    try:
-        return Path(path).resolve().relative_to(Path(APP_DATA_DIR).resolve()).as_posix()
-    except ValueError:
-        return Path(path).as_posix()
 
 
 def _to_int(v: object) -> int | None:
@@ -97,7 +89,7 @@ def upsert_spectral_library(db: Session, lib: dict, now: datetime | None = None)
         library_name=lib.get("label", lib["id"]),
         version="1",
         file_format="ENVI",
-        data_ref=_rel(lib["data_path"]),
+        data_ref=storage.relativise(lib["data_path"]),
         created_at=now,
         num_spectra=_to_int(md.get("lines")),
         dc_creator="unknown",
@@ -146,7 +138,7 @@ def sync_datasets_to_db(db: Session) -> dict[str, int]:
                 db.merge(HsiCube(
                     cube_id=stable_id("cube", dataset_id),
                     acquisition_id=acq_uuid,
-                    data_ref=_rel(hdr),
+                    data_ref=storage.relativise(hdr),
                     created_at=now,
                     samples=md["width"],
                     lines=md["height"],
@@ -174,7 +166,7 @@ def sync_datasets_to_db(db: Session) -> dict[str, int]:
                 source_tool="imported",
                 capture_modality=_infer_modality(path),
                 file_format=Path(path).suffix.lstrip(".").lower(),
-                data_ref=_rel(path),
+                data_ref=storage.relativise(path),
                 imported_at=now,
             ))
             inputs += 1

@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from ..paths import APP_DATA_DIR
+from ..paths import APP_DATA_DIR, storage
 
 PROJECT_ID = "old_man"
 PROJECT_DIR = APP_DATA_DIR / PROJECT_ID
@@ -34,11 +34,6 @@ def _to_title(text: str) -> str:
 
 
 PROJECT_NAME = _to_title(PROJECT_ID)
-
-
-def _abs_path(data_ref: str) -> Path:
-    """Absolute path from a stored `data_ref` (relative to APP_DATA_DIR, or already absolute)."""
-    return APP_DATA_DIR / data_ref
 
 
 def dataset_id_for_data_ref(data_ref: str) -> str:
@@ -77,7 +72,7 @@ def _build_registry_from_db() -> dict[str, Any]:
                 "name": cube.title or _default_name(cube.data_ref),
                 "project_id": PROJECT_ID,
                 "project_name": PROJECT_NAME,
-                "envi_hdr": str(_abs_path(cube.data_ref)),
+                "envi_hdr": str(storage.resolve(cube.data_ref)),
             }
 
         for inp in db.query(ExternalInput).all():
@@ -91,7 +86,7 @@ def _build_registry_from_db() -> dict[str, Any]:
             }
             suffix = Path(inp.data_ref).suffix.lower()
             key = "tiff" if suffix in {".tif", ".tiff"} else "png" if suffix == ".png" else "jpg"
-            rec[key] = str(_abs_path(inp.data_ref))
+            rec[key] = str(storage.resolve(inp.data_ref))
             out[dataset_id] = rec
 
     return out

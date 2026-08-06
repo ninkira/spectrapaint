@@ -151,6 +151,14 @@ def _read_visual_size(path: str) -> tuple[int, int]:
 
 
 def _to_relative_project_path(path: str) -> str:
+    """Path relative to the PROJECT folder, for `DatasetMeta.path`.
+
+    Deliberately not `storage.relativise`, which is relative to the data root. This value feeds
+    `buildLayerTree` in the frontend, which splits it on "/" to build the Data Manager tree, so
+    rebasing it would insert a project level into that tree. That is the right end state, but it
+    belongs with the change that removes the hardcoded project and adds a project selector —
+    not here, where it would just be an unexplained extra folder.
+    """
     p = Path(path).resolve()
     try:
         return p.relative_to(PROJECT_ROOT.resolve()).as_posix()

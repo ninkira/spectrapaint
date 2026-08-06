@@ -28,7 +28,7 @@ from ..db.database import get_db
 from ..db.ids import stable_id
 from ..db.models import Artefact, DataAcquisition, ExternalInput, HsiCube, Project
 from ..models.dataset_meta import DatasetMeta
-from ..paths import APP_DATA_DIR
+from ..paths import APP_DATA_DIR, storage
 from ..services.cube_loader import open_envi, read_full_metadata
 from ..services.dataset_store import (
     PROJECT_ID,
@@ -97,14 +97,6 @@ def _unique_path(folder: Path, stem: str, ext: str) -> Path:
         candidate = folder / f"{stem}_{i}{ext}"
         i += 1
     return candidate
-
-
-def _rel(path: Path) -> str:
-    """Path relative to APP_DATA_DIR (portable) — matches how existing rows store data_ref."""
-    try:
-        return path.resolve().relative_to(APP_DATA_DIR.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
 
 
 def _dataset_id_for(path: Path) -> str:
@@ -201,7 +193,7 @@ def _handle_hsi(
     db.merge(HsiCube(
         cube_id=stable_id("cube", dataset_id),
         acquisition_id=acq.acquisition_id,
-        data_ref=_rel(hdr_path),
+        data_ref=storage.relativise(hdr_path),
         dataset_id=dataset_id,
         title=(meta.title.strip() if meta.title and meta.title.strip() else None),
         created_at=now,
@@ -263,7 +255,7 @@ def _handle_visual(
         file_format=ext.lstrip("."),
         width=width,
         height_px=height,
-        data_ref=_rel(dest),
+        data_ref=storage.relativise(dest),
         capture_date=meta.capture_date,
         camera_model=meta.camera_model,
         instrument_id=meta.instrument_id,
