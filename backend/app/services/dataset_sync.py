@@ -79,12 +79,18 @@ def upsert_spectral_library(db: Session, lib: dict, now: datetime | None = None)
     names, interleave, data type). Required-but-unknown model fields get safe placeholders.
     """
     now = now or datetime.now(timezone.utc)
+    img = None
     try:
         img = spyio.envi.open(lib["hdr_path"], lib["data_path"])
         md = dict(getattr(img, "metadata", {}) or {})
     except Exception:
         md = {}
-    wl = _to_float_list(md.get("wavelength")) or []
+
+    # Opening an ENVI *library* moves "spectra names" and "wavelength" out of the metadata dict
+    # and onto the object (as .names / .bands.centers), so reading md alone would silently store
+    # empty lists. This mirrors the fallback _load_library_matrix already applies.
+    wl = _to_float_list(md.get("wavelength")) or _to_float_list(getattr(getattr(img, "bands", None), "centers", None)) or []
+    names = _parse_str_list(md.get("spectra names")) or _parse_str_list(getattr(img, "names", None))
     n_bands = _to_int(md.get("samples")) or (len(wl) if wl else 0)
     db.merge(SpectralLibrary(
         library_id=stable_id("library", lib["id"]),
@@ -102,7 +108,7 @@ def upsert_spectral_library(db: Session, lib: dict, now: datetime | None = None)
         interleave=(str(md["interleave"]).upper() if md.get("interleave") else "BSQ"),
         data_type=_to_int(md.get("data type")) or 0,
         file_type=str(md.get("file type", "ENVI Spectral Library")),
-        spectra_names=_parse_str_list(md.get("spectra names")),
+        spectra_names=names,
     ))
 
 
