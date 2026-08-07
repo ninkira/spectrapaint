@@ -1,10 +1,11 @@
-﻿import logging
+import logging
 import os
 import re
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from spectral import io as spyio
 
 from ..core.registry import CLASSIFIERS, UnknownPlugin
+from ..core.spectra.alignment import Alignment, AlignmentError, align, to_nanometres
 from ..analysis.classification.reference_registry import (
     get_reference_library_or_404,
     list_reference_libraries,
@@ -124,8 +126,47 @@ class PipelineRequest(BaseModel):
     preprocessing_method_id: str | None = None
     classification_method_id: str
     reference_library_id: str
-    mean_signal: MeanSignal
+    # Optional: when omitted the query comes from the ROI's persisted SpectralExtraction, which
+    # is the authoritative measurement. A client-supplied signal is still honoured so the
+    # frontend can migrate at its own pace.
+    mean_signal: MeanSignal | None = None
+    alignment: Literal["resample", "truncate"] = "resample"
     top_k: int = 5
+
+
+def _resolve_query_signal(db: Session, req: "PipelineRequest") -> tuple[np.ndarray, list[float], str]:
+    """The spectrum to classify, and the wavelengths it was sampled at.
+
+    Prefers the stored extraction: it is a prov:Entity measured from the cube, whereas a
+    client-supplied mean was computed in the browser from whatever it had plotted.
+    """
+    if req.mean_signal is not None:
+        if not req.mean_signal.values:
+            raise HTTPException(status_code=400, detail="mean_signal.values is empty")
+        if len(req.mean_signal.wavelengths_nm) != len(req.mean_signal.values):
+            raise HTTPException(
+                status_code=400, detail="mean_signal wavelengths/values length mismatch"
+            )
+        return (
+            np.asarray(req.mean_signal.values, dtype=float),
+            to_nanometres(req.mean_signal.wavelengths_nm),
+            "request",
+        )
+
+    extraction = db.get(SpectralExtraction, stable_id("extraction", req.roi_id))
+    if extraction is None or not extraction.mean_spectrum:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No spectral extraction on record for this ROI. Save the annotation first, or "
+                "send mean_signal with the request."
+            ),
+        )
+    cube = db.get(HsiCube, stable_id("cube", req.dataset_id))
+    wavelengths = to_nanometres(
+        cube.wavelengths if cube else None, cube.wavelength_units if cube else None
+    )
+    return np.asarray(extraction.mean_spectrum, dtype=float), wavelengths, "extraction"
 
 
 def _strip_spectrum_suffix(name: str) -> str:
@@ -356,7 +397,9 @@ def _load_library_matrix(reference_library: dict) -> tuple[np.ndarray, list[str]
     return result
 
 
-def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.ndarray) -> np.ndarray:
+def _compute_distances(
+    method_id: str, query: np.ndarray, library_matrix: np.ndarray, *, higher_is_better: bool = False
+) -> np.ndarray:
     try:
         score = CLASSIFIERS.get(method_id)
     except UnknownPlugin as exc:
@@ -366,7 +409,8 @@ def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.nda
 
     finite_mask = np.isfinite(distances)
     if not np.all(finite_mask):
-        distances = np.where(finite_mask, distances, np.inf)
+        # Push unscoreable spectra to the bottom of the ranking, whichever way it sorts.
+        distances = np.where(finite_mask, distances, -np.inf if higher_is_better else np.inf)
     if distances.shape[0] != library_matrix.shape[0]:
         raise HTTPException(
             status_code=500,
@@ -381,6 +425,7 @@ def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.nda
 def _persist_classification_run(
     db: Session, req: "PipelineRequest", reference_library: dict,
     results: dict, top_matches: list[dict],
+    query_signal: dict, alignment: Alignment,
 ) -> None:
     """Record a run as provenance: SpectralExtraction -> ProcessingOperation -> DerivedDataset."""
     now = datetime.now(timezone.utc)
@@ -400,7 +445,7 @@ def _persist_classification_run(
             roi_fk = candidate
     except (ValueError, TypeError):
         pass
-    wl = req.mean_signal.wavelengths_nm
+    wl = query_signal["wavelengths_nm"]
     wrange = f"{min(wl):.1f}-{max(wl):.1f} nm" if wl else None
     existing = db.get(SpectralExtraction, ext_uuid)
     if existing is None:
@@ -410,7 +455,7 @@ def _persist_classification_run(
             extraction_id=ext_uuid,
             roi_id=roi_fk,
             library_id=lib_uuid,
-            mean_spectrum=list(req.mean_signal.values),
+            mean_spectrum=list(query_signal["values"]),
             std_spectrum=[],
             pixel_count=0,
             wavelength_range=wrange,
@@ -432,6 +477,11 @@ def _persist_classification_run(
             "preprocessing_method_id": req.preprocessing_method_id,
             "reference_library_id": req.reference_library_id,
             "top_k": req.top_k,
+            # How the two grids were reconciled is part of what makes the run reproducible —
+            # a truncated comparison stays auditable after the fact rather than looking like a
+            # resampled one.
+            "alignment": alignment.as_dict(),
+            "query_source": results.get("query_source"),
         },
         executed_at=now,
         software_version="SpectraPaint",
@@ -463,33 +513,32 @@ def run_pipeline(req: PipelineRequest, db: Session = Depends(get_db)):
     get_dataset_record_or_404(req.dataset_id)
     reference_library = get_reference_library_or_404(req.reference_library_id)
 
-    if not req.mean_signal.values:
-        raise HTTPException(status_code=400, detail="mean_signal.values is empty")
-    if len(req.mean_signal.wavelengths_nm) != len(req.mean_signal.values):
-        raise HTTPException(status_code=400, detail="mean_signal wavelengths/values length mismatch")
-
     if req.classification_method_id not in CLASSIFIERS:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown classification method: {req.classification_method_id}",
         )
 
-    query = np.asarray(req.mean_signal.values, dtype=float)
+    query, query_wavelengths, query_source = _resolve_query_signal(db, req)
     library_matrix, pigment_names, library_wavelengths = _load_library_matrix(reference_library)
+    library_wavelengths = to_nanometres(library_wavelengths)
 
-    min_bands = min(query.shape[0], library_matrix.shape[1])
-    if min_bands <= 0:
-        raise HTTPException(status_code=400, detail="No overlapping bands for classification")
-    if query.shape[0] != min_bands:
-        query = query[:min_bands]
-    if library_matrix.shape[1] != min_bands:
-        library_matrix = library_matrix[:, :min_bands]
-    if library_wavelengths and len(library_wavelengths) >= min_bands:
-        library_wavelengths = library_wavelengths[:min_bands]
+    try:
+        query, library_matrix, alignment = align(
+            query, query_wavelengths, library_matrix, library_wavelengths, mode=req.alignment
+        )
+    except AlignmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if alignment.overlap_nm:
+        low, high = alignment.overlap_nm
+        library_wavelengths = [w for w in query_wavelengths if low <= w <= high]
 
-    distances = _compute_distances(req.classification_method_id, query, library_matrix)
+    higher_is_better = bool(CLASSIFIERS.meta(req.classification_method_id).get("higher_is_better"))
+    distances = _compute_distances(
+        req.classification_method_id, query, library_matrix, higher_is_better=higher_is_better
+    )
     k = max(1, min(int(req.top_k), int(distances.shape[0])))
-    order = np.argsort(distances)[:k]
+    order = np.argsort(-distances if higher_is_better else distances)[:k]
     library_dir = str(Path(reference_library["hdr_path"]).parent)
 
     top_matches = []
@@ -511,17 +560,22 @@ def run_pipeline(req: PipelineRequest, db: Session = Depends(get_db)):
             }
         )
 
+    query_signal = {"wavelengths_nm": library_wavelengths, "values": query.tolist()}
     results = {
         "preprocessing_method": req.preprocessing_method_id,
         "classification_method": req.classification_method_id,
         "reference_library_id": req.reference_library_id,
         "reference_library_label": reference_library["label"],
+        "query_source": query_source,
+        "alignment": alignment.as_dict(),
         "top_matches": top_matches,
     }
 
     # Record the run as provenance (best-effort — never block the classification response).
     try:
-        _persist_classification_run(db, req, reference_library, results, top_matches)
+        _persist_classification_run(
+            db, req, reference_library, results, top_matches, query_signal, alignment
+        )
     except Exception:
         db.rollback()
         logger.exception("Failed to persist classification run (results still returned)")
@@ -529,7 +583,7 @@ def run_pipeline(req: PipelineRequest, db: Session = Depends(get_db)):
     return {
         "datasetId": req.dataset_id,
         "roiId": req.roi_id,
-        "mean_signal": req.mean_signal.model_dump(),
+        "mean_signal": query_signal,
         "library": {
             "bands": int(library_matrix.shape[1]),
             "size": int(library_matrix.shape[0]),

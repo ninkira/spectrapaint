@@ -197,6 +197,68 @@ def test_classification_does_not_clobber_a_real_extraction(client, db, hsi, libr
     assert after.library_id is not None                # the run is recorded against the library
 
 
+def test_pipeline_reads_the_query_from_the_persisted_extraction(client, db, hsi, library):
+    """W3-4: with no mean_signal the query comes from the stored prov:Entity, server-side."""
+    roi_id = str(uuid.uuid4())
+    client.put(f"/api/datasets/{hsi['id']}/annotations", json={"annotations": [{
+        "id": roi_id, "kind": "region", "type": "rect",
+        "geometry": {"x": 0, "y": 0, "w": 2, "h": 2},
+    }]})
+    stored = db.query(SpectralExtraction).one().mean_spectrum
+
+    body = client.post("/api/classification/pipeline/run", json={
+        "dataset_id": hsi["id"],
+        "roi_id": roi_id,
+        "classification_method_id": "klpd",
+        "reference_library_id": library["id"],
+        # no mean_signal
+    }).json()
+
+    assert body["results"]["query_source"] == "extraction"
+    assert body["mean_signal"]["values"] == pytest.approx(stored)
+    assert body["mean_signal"]["wavelengths_nm"] == WAVELENGTHS  # from the cube, not the client
+
+
+def test_pipeline_without_a_signal_or_an_extraction_explains_itself(client, hsi, library):
+    response = client.post("/api/classification/pipeline/run", json={
+        "dataset_id": hsi["id"],
+        "roi_id": str(uuid.uuid4()),
+        "classification_method_id": "klpd",
+        "reference_library_id": library["id"],
+    })
+    assert response.status_code == 400
+    assert "Save the annotation first" in response.json()["detail"]
+
+
+def test_pipeline_records_how_the_grids_were_aligned(client, db, hsi, library):
+    """A truncated run must stay distinguishable from a resampled one after the fact."""
+    run_pipeline(client, hsi["id"], library["id"])
+
+    operation = db.query(ProcessingOperation).one()
+    alignment = operation.parameters["alignment"]
+    assert alignment["mode"] == "resample"
+    assert alignment["n_bands"] == 5
+    assert alignment["overlap_nm"] == [400.0, 600.0]
+
+
+def test_pipeline_falls_back_to_truncation_and_says_so(client, tmp_path, hsi):
+    """A library with no wavelengths in its header still classifies, but the run records why."""
+    hdr = tmp_path / "nowl.hdr"
+    write_spectral_library(hdr)
+    # Strip the wavelength line so the header carries no spectral grid at all.
+    hdr.write_text(
+        "\n".join(l for l in hdr.read_text(encoding="utf-8").splitlines()
+                  if not l.startswith("wavelength =")) + "\n",
+        encoding="utf-8",
+    )
+    lib = upload_library(client, hdr, name="nowl_library")
+
+    body = run_pipeline(client, hsi["id"], lib["id"]).json()
+    alignment = body["results"]["alignment"]
+    assert alignment["mode"] == "truncate"
+    assert any("Wavelengths are missing" in w for w in alignment["warnings"])
+
+
 def test_classification_on_an_unsaved_roi_still_records_an_extraction(client, db, hsi, library):
     """No ROI on record, so the client's mean signal is all there is to go on."""
     run_pipeline(client, hsi["id"], library["id"])
@@ -235,15 +297,6 @@ def test_pipeline_rejects_an_unknown_dataset(client, library):
     assert run_pipeline(client, "no-such-dataset", library["id"]).status_code == 404
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known bug (plan W3-5): the pipeline aligns query and library spectra by truncating "
-        "both to min_bands instead of matching them by wavelength, so a cube and a library "
-        "covering disjoint spectral ranges are compared band-index to band-index and return "
-        "confident nonsense. Remove this marker once resampling lands."
-    ),
-)
 def test_pipeline_refuses_a_library_with_no_spectral_overlap(client, hsi, tmp_path):
     swir = upload_library(
         client,

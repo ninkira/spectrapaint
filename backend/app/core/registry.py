@@ -71,6 +71,13 @@ class Registry(Generic[T]):
         """The registry as plain dicts, for serving over the API. Registration order."""
         return [{"id": r.id, "label": r.label, **r.meta} for r in self._items.values()]
 
+    def meta(self, id: str) -> Mapping[str, Any]:
+        """The metadata a plug-in registered itself with."""
+        try:
+            return self._items[id].meta
+        except KeyError:
+            raise UnknownPlugin(f"Unknown {self._kind}: {id!r}") from None
+
     def ids(self) -> list[str]:
         return list(self._items)
 
