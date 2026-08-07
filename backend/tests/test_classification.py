@@ -162,6 +162,34 @@ def test_pipeline_records_the_provenance_chain(client, db, hsi, library):
     assert len(derived.class_names) == 3
 
 
+def test_classification_does_not_clobber_a_real_extraction(client, db, hsi, library):
+    """Saving the ROI extracted real statistics; a run must not overwrite them with placeholders."""
+    roi_id = str(uuid.uuid4())
+    client.put(f"/api/datasets/{hsi['id']}/annotations", json={"annotations": [{
+        "id": roi_id, "kind": "region", "type": "rect",
+        "geometry": {"x": 0, "y": 0, "w": 2, "h": 2},
+    }]})
+    before = db.query(SpectralExtraction).one()
+    assert before.pixel_count == 4
+
+    run_pipeline(client, hsi["id"], library["id"], roi_id=roi_id)
+
+    db.expire_all()
+    after = db.query(SpectralExtraction).one()
+    assert after.pixel_count == 4                      # not reset to 0
+    assert after.std_spectrum == before.std_spectrum   # not reset to []
+    assert after.library_id is not None                # the run is recorded against the library
+
+
+def test_classification_on_an_unsaved_roi_still_records_an_extraction(client, db, hsi, library):
+    """No ROI on record, so the client's mean signal is all there is to go on."""
+    run_pipeline(client, hsi["id"], library["id"])
+
+    extraction = db.query(SpectralExtraction).one()
+    assert extraction.roi_id is None
+    assert extraction.pixel_count == 0  # genuinely unknown, not measured
+
+
 def test_deleting_the_dataset_unwinds_the_provenance_chain(client, db, hsi, library):
     """Deleting a dataset must unwind ROI -> extraction without tripping the operation's FK."""
     roi_id = str(uuid.uuid4())

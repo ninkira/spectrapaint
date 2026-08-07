@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 
+from ..core.roi.extraction import ensure_extraction
 from ..db.database import get_db
 from ..db.ids import stable_id
 from ..db.models import (
@@ -549,6 +550,11 @@ def _replace_dataset_annotations(db: Session, dataset_id: str, annotations: list
     cube = db.get(HsiCube, stable_id("cube", dataset_id))  # None for non-HSI / unsynced datasets
 
     seen: set[uuid.UUID] = set()
+    # Every ROI that survives this save, paired with whether its geometry moved. Unmoved ROIs
+    # are still passed through so a missing extraction gets filled in; `ensure_extraction`
+    # short-circuits when one is already on record.
+    kept: list[tuple[RoiAnnotation, bool]] = []
+
     for ann in annotations:
         if not isinstance(ann, dict):
             continue
@@ -559,17 +565,26 @@ def _replace_dataset_annotations(db: Session, dataset_id: str, annotations: list
 
         row = existing.get(roi_id)
         if row is None:
-            db.add(RoiAnnotation(roi_id=roi_id, **values))
+            row = RoiAnnotation(roi_id=roi_id, **values)
+            db.add(row)
+            kept.append((row, True))
             continue
+
+        previous_geometry = (row.data or {}).get("geometry")
         # `created` is the WADM creation time and belongs to the original row, not this save.
         del values["created"]
         for column, value in values.items():
             setattr(row, column, value)
+        kept.append((row, previous_geometry != (row.data or {}).get("geometry")))
 
     removed = [roi_id for roi_id in existing if roi_id not in seen]
     _detach_operations_from_roi_extractions(db, removed)
     for roi_id in removed:
         db.delete(existing[roi_id])  # ORM delete, so the cascade to SpectralExtraction fires
+
+    db.flush()  # the ROI rows must exist before an extraction can reference them
+    for row, geometry_changed in kept:
+        ensure_extraction(db, row, cube, recompute=geometry_changed)
 
     db.commit()
     return len(seen)

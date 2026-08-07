@@ -99,25 +99,11 @@ def test_legacy_json_annotations_are_imported_on_first_read(client, hsi):
     assert imported[0]["title"] == "Darkened blue area"
 
 
-def add_extraction(db, annotation: dict) -> SpectralExtraction:
-    """Attach a SpectralExtraction to a saved ROI, as running a classification would."""
-    extraction = SpectralExtraction(
-        extraction_id=stable_id("extraction", annotation["id"]),
-        roi_id=uuid.UUID(annotation["id"]),
-        mean_spectrum=[1.0, 2.0],
-        std_spectrum=[0.1, 0.2],
-        pixel_count=4,
-    )
-    db.add(extraction)
-    db.commit()
-    return extraction
-
-
 def test_re_saving_an_annotation_that_has_an_extraction_does_not_fail(client, db, hsi):
     """Regression: a bulk delete here bypassed the ORM cascade and tripped the FK constraint."""
     annotation = rect_annotation()
     put_annotations(client, hsi["id"], [annotation])
-    add_extraction(db, annotation)
+    assert db.query(SpectralExtraction).count() == 1  # saving extracted spectra automatically
 
     assert put_annotations(client, hsi["id"], [annotation]).status_code == 200
     assert db.query(SpectralExtraction).count() == 1
@@ -126,7 +112,6 @@ def test_re_saving_an_annotation_that_has_an_extraction_does_not_fail(client, db
 def test_editing_an_annotation_keeps_its_extraction(client, db, hsi):
     annotation = rect_annotation()
     put_annotations(client, hsi["id"], [annotation])
-    add_extraction(db, annotation)
 
     annotation["title"] = "Renamed region"
     put_annotations(client, hsi["id"], [annotation])
@@ -153,27 +138,27 @@ def test_editing_an_annotation_preserves_its_created_timestamp(client, db, hsi):
 def test_removing_an_annotation_deletes_its_extraction(client, db, hsi):
     keep, drop = rect_annotation(), rect_annotation()
     put_annotations(client, hsi["id"], [keep, drop])
-    add_extraction(db, drop)
+    assert db.query(SpectralExtraction).count() == 2
 
     put_annotations(client, hsi["id"], [keep])
 
     db.expire_all()
     assert [r.roi_id for r in db.query(RoiAnnotation).all()] == [uuid.UUID(keep["id"])]
-    assert db.query(SpectralExtraction).count() == 0
+    assert db.query(SpectralExtraction).count() == 1
+    assert db.query(SpectralExtraction).one().roi_id == uuid.UUID(keep["id"])
 
 
 def test_removing_an_annotation_keeps_the_classification_run_that_used_it(client, db, hsi):
     """The extraction goes, but the ProcessingOperation is detached rather than deleted."""
     annotation = rect_annotation()
     put_annotations(client, hsi["id"], [annotation])
-    extraction = add_extraction(db, annotation)
     db.add(ProcessingOperation(
         operation_id=uuid.uuid4(),
         operation_type="classification",
         method_name="klpd",
         parameters={},
         software_version="SpectraPaint",
-        input_extraction_id=extraction.extraction_id,
+        input_extraction_id=stable_id("extraction", annotation["id"]),
     ))
     db.commit()
 
@@ -183,6 +168,109 @@ def test_removing_an_annotation_keeps_the_classification_run_that_used_it(client
     assert db.query(SpectralExtraction).count() == 0
     operation = db.query(ProcessingOperation).one()  # history survives
     assert operation.input_extraction_id is None
+
+
+def test_saving_an_roi_extracts_its_spectra(client, db, hsi):
+    """Fig. 4: ROI selection triggers Spectral Extraction — mean, std and pixel count."""
+    annotation = rect_annotation()  # 2x2 box at the origin
+    put_annotations(client, hsi["id"], [annotation])
+
+    extraction = db.query(SpectralExtraction).one()
+    assert extraction.roi_id == uuid.UUID(annotation["id"])
+    assert extraction.pixel_count == 4
+    # Cube values are y*100 + x*10 + b, so band 0 over (0,0),(1,0),(0,1),(1,1) averages 55.
+    assert extraction.mean_spectrum[0] == pytest.approx(55.0)
+    assert extraction.std_spectrum[0] == pytest.approx(58.023, abs=0.01)  # ddof=1
+    assert extraction.min_spectrum[0] == pytest.approx(0.0)
+    assert extraction.max_spectrum[0] == pytest.approx(110.0)
+    assert extraction.wavelength_range == "400.0-600.0 nm"
+    # An extraction is derived from its cube; only a classification associates a library.
+    assert extraction.library_id is None
+
+
+@pytest.mark.parametrize(
+    ("shape", "geometry", "expected_pixels"),
+    [
+        ("rect", {"x": 0, "y": 0, "w": 4, "h": 3}, 12),          # the whole 4x3 cube
+        ("point", {"x": 2, "y": 1}, 1),
+        # matplotlib's contains_points excludes the y=0 boundary row, so a polygon tracing the
+        # full extent yields 8 rather than 12. Pre-existing behaviour of the polygon endpoint.
+        ("polygon", [{"x": 0, "y": 0}, {"x": 3, "y": 0}, {"x": 3, "y": 2}, {"x": 0, "y": 2}], 8),
+        ("polygon", [{"x": 0, "y": 0}, {"x": 3, "y": 0}, {"x": 3, "y": 2}], 3),
+        ("line", [{"x": 0, "y": 0}, {"x": 3, "y": 0}], 4),
+        ("line", [{"x": 0, "y": 0}, {"x": 3, "y": 0}, {"x": 3, "y": 2}], 6),  # multi-point polyline
+        ("ellipse", {"cx": 1, "cy": 1, "rx": 1, "ry": 1}, 5),
+    ],
+)
+def test_every_roi_shape_extracts(client, db, hsi, shape, geometry, expected_pixels):
+    if shape == "polygon":
+        geometry = {"vertices": geometry}
+    elif shape == "line":
+        geometry = {"points": geometry}
+    put_annotations(client, hsi["id"], [rect_annotation(type=shape, geometry=geometry)])
+    assert db.query(SpectralExtraction).one().pixel_count == expected_pixels
+
+
+def test_an_unchanged_roi_is_not_re_extracted(client, db, hsi):
+    """The guard that keeps a dataset with thirty ROIs from re-reading the cube thirty times."""
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+
+    # Tag the stored row; a recompute would overwrite it.
+    db.query(SpectralExtraction).one().mean_spectrum = [-1.0]
+    db.commit()
+
+    annotation["title"] = "Only the label changed"
+    put_annotations(client, hsi["id"], [annotation])
+
+    db.expire_all()
+    assert db.query(SpectralExtraction).one().mean_spectrum == [-1.0]
+
+
+def test_a_placeholder_extraction_is_upgraded_on_the_next_save(client, db, hsi):
+    """A classification on an unsaved ROI leaves pixel_count=0; saving must fill in the real one."""
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+    extraction = db.query(SpectralExtraction).one()
+    extraction.pixel_count = 0          # what a pre-W3-3 classification run left behind
+    extraction.std_spectrum = []
+    db.commit()
+
+    put_annotations(client, hsi["id"], [annotation])  # same geometry
+
+    db.expire_all()
+    refreshed = db.query(SpectralExtraction).one()
+    assert refreshed.pixel_count == 4
+    assert len(refreshed.std_spectrum) == 5
+
+
+def test_moving_an_roi_recomputes_its_spectra(client, db, hsi):
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+    assert db.query(SpectralExtraction).one().pixel_count == 4
+
+    annotation["geometry"] = {"x": 0, "y": 0, "w": 4, "h": 3}
+    put_annotations(client, hsi["id"], [annotation])
+
+    db.expire_all()
+    assert db.query(SpectralExtraction).one().pixel_count == 12
+
+
+def test_an_roi_on_a_visual_gets_no_extraction(client, db, visual):
+    """External inputs enter the pipeline for annotation only, not for spectral processing."""
+    put_annotations(client, visual["id"], [rect_annotation()])
+    assert db.query(RoiAnnotation).count() == 1
+    assert db.query(SpectralExtraction).count() == 0
+
+
+def test_a_malformed_geometry_still_saves_the_annotation(client, db, hsi):
+    """Extraction is best-effort — a geometry we cannot mask must not block the save."""
+    response = put_annotations(client, hsi["id"], [
+        rect_annotation(type="rect", geometry={"nonsense": True}),
+    ])
+    assert response.status_code == 200
+    assert db.query(RoiAnnotation).count() == 1
+    assert db.query(SpectralExtraction).count() == 0
 
 
 def test_duplicate_ids_in_one_payload_are_collapsed(client, db, hsi):

@@ -413,16 +413,24 @@ def _persist_classification_run(
         pass
     wl = req.mean_signal.wavelengths_nm
     wrange = f"{min(wl):.1f}-{max(wl):.1f} nm" if wl else None
-    db.merge(SpectralExtraction(
-        extraction_id=ext_uuid,
-        roi_id=roi_fk,
-        library_id=lib_uuid,
-        mean_spectrum=list(req.mean_signal.values),
-        std_spectrum=[],       # not provided by the pipeline request
-        pixel_count=0,         # mean_signal is precomputed; count unknown here
-        wavelength_range=wrange,
-        extracted_at=now,
-    ))
+    existing = db.get(SpectralExtraction, ext_uuid)
+    if existing is None:
+        # No extraction on record — the ROI was never saved, so the client's mean signal is all
+        # we have. std/pixel_count are genuinely unknown here rather than zero.
+        db.add(SpectralExtraction(
+            extraction_id=ext_uuid,
+            roi_id=roi_fk,
+            library_id=lib_uuid,
+            mean_spectrum=list(req.mean_signal.values),
+            std_spectrum=[],
+            pixel_count=0,
+            wavelength_range=wrange,
+            extracted_at=now,
+        ))
+    else:
+        # Saving the ROI already extracted real statistics. Record which library this run
+        # compared against, but never overwrite mean/std/pixel_count with the client's figures.
+        existing.library_id = lib_uuid
     db.flush()  # persist the extraction before the operation references it
 
     # ProcessingOperation: one row per run (accumulates a provenance history).

@@ -2,15 +2,20 @@ from typing import List, Literal, Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from matplotlib.path import Path as MplPath
 from pydantic import BaseModel
 
+from ..core.roi.geometry import EmptyRegionError, line_pixels, polygon_mask
 from ..services.cube_loader import get_cube_for_path
 from ..services.dataset_store import get_dataset_record_or_404
 from ..services.spectra_region import compute_region_stats, extract_region_signals
 
 
 router = APIRouter()
+
+
+def _bad_region(exc: EmptyRegionError) -> HTTPException:
+    """Geometry errors are a domain concern; only the API layer knows they are 400s."""
+    return HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/datasets/{id}/spectra")
@@ -43,7 +48,10 @@ def spectra_region(
     rec = get_dataset_record_or_404(id)
     cube, md = get_cube_for_path(rec["envi_hdr"])
 
-    spectra_out = extract_region_signals(cube, shape, x0, y0, x1, y1)
+    try:
+        spectra_out = extract_region_signals(cube, shape, x0, y0, x1, y1)
+    except EmptyRegionError as exc:
+        raise _bad_region(exc) from exc
     stats = compute_region_stats(spectra_out)
 
     return {
@@ -61,26 +69,6 @@ def spectra_region(
     }
 
 
-def bresenham(x0: int, y0: int, x1: int, y1: int):
-    dx = abs(x1 - x0)
-    dy = -abs(y1 - y0)
-    sx = 1 if x0 < x1 else -1
-    sy = 1 if y0 < y1 else -1
-    err = dx + dy
-    x, y = x0, y0
-    while True:
-        yield x, y
-        if x == x1 and y == y1:
-            break
-        e2 = 2 * err
-        if e2 >= dy:
-            err += dy
-            x += sx
-        if e2 <= dx:
-            err += dx
-            y += sy
-
-
 @router.get("/datasets/{id}/spectra-line")
 def spectra_line(
     id: str,
@@ -94,23 +82,17 @@ def spectra_line(
     cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
-    x0c = max(0, min(w - 1, x0))
-    x1c = max(0, min(w - 1, x1))
-    y0c = max(0, min(h - 1, y0))
-    y1c = max(0, min(h - 1, y1))
+    try:
+        ys, xs = line_pixels([(x0, y0), (x1, y1)], w, h, step=step)
+    except EmptyRegionError as exc:
+        raise _bad_region(exc) from exc
 
     wl = md["wavelengths_nm"]
-    spectra_out = []
-
-    i = 0
-    for x, y in bresenham(x0c, y0c, x1c, y1c):
-        if step > 1 and (i % step) != 0:
-            i += 1
-            continue
-        i += 1
-        spec = cube[y, x, :].astype(float)
-        spectra_out.append({"x": x, "y": y, "wavelengths_nm": wl, "values": spec.tolist()})
-
+    values = cube[ys, xs, :].astype(float).tolist()
+    spectra_out = [
+        {"x": int(xs[i]), "y": int(ys[i]), "wavelengths_nm": wl, "values": values[i]}
+        for i in range(len(ys))
+    ]
     return {"spectra": spectra_out}
 
 
@@ -127,31 +109,13 @@ class PolygonRequest(BaseModel):
 @router.post("/datasets/{id}/spectra-polygon")
 def spectra_polygon(id: str, req: PolygonRequest):
     rec = get_dataset_record_or_404(id)
-
-    if not req.vertices or len(req.vertices) < 3:
-        raise HTTPException(400, "Polygon needs at least 3 vertices")
-
     cube, md = get_cube_for_path(rec["envi_hdr"])
     h, w, _ = cube.shape
 
-    verts = [Point(x=max(0, min(w - 1, v.x)), y=max(0, min(h - 1, v.y))) for v in req.vertices]
-
-    xs = [v.x for v in verts]
-    ys = [v.y for v in verts]
-    x_min = max(0, min(xs))
-    x_max = min(w - 1, max(xs))
-    y_min = max(0, min(ys))
-    y_max = min(h - 1, max(ys))
-
-    # Vectorized point-in-polygon using matplotlib
-    poly_path = MplPath([(v.x, v.y) for v in verts])
-    ys_grid, xs_grid = np.mgrid[y_min:y_max + 1, x_min:x_max + 1]
-    points = np.column_stack([xs_grid.ravel(), ys_grid.ravel()])
-    mask = poly_path.contains_points(points).reshape(ys_grid.shape)
-
-    inside_ys, inside_xs = np.where(mask)
-    inside_ys += y_min
-    inside_xs += x_min
+    try:
+        inside_ys, inside_xs = polygon_mask([(v.x, v.y) for v in req.vertices], w, h)
+    except EmptyRegionError as exc:
+        raise _bad_region(exc) from exc
 
     wl = md["wavelengths_nm"]
     max_points = req.max_points
