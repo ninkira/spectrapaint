@@ -12,8 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from spectral import io as spyio
 
-from ..analysis.classification.distance_metrics import DistanceMetrics
-from ..analysis.classification.distance_registry import METHODS
+from ..core.registry import CLASSIFIERS, UnknownPlugin
 from ..analysis.classification.reference_registry import (
     get_reference_library_or_404,
     list_reference_libraries,
@@ -39,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 @router.get("/classification/methods")
 def list_methods():
-    return {"methods": METHODS}
+    return {"methods": CLASSIFIERS.list()}
 
 
 @router.get("/classification/libraries")
@@ -358,22 +357,12 @@ def _load_library_matrix(reference_library: dict) -> tuple[np.ndarray, list[str]
 
 
 def _compute_distances(method_id: str, query: np.ndarray, library_matrix: np.ndarray) -> np.ndarray:
-    dm = DistanceMetrics()
-    query_matrix = np.repeat(query[None, :], library_matrix.shape[0], axis=0)
+    try:
+        score = CLASSIFIERS.get(method_id)
+    except UnknownPlugin as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if method_id == "sam_matrix":
-        distances = dm.matrix_spectral_angle_mapper(query_matrix, library_matrix)
-    elif method_id == "cosine_matrix":
-        distances = dm.matrix_cosine_distance(query_matrix, library_matrix)
-    elif method_id == "klpd":
-        distances = np.asarray(dm.klpd_spectral(query_matrix, library_matrix, mode=3)).reshape(-1)
-    elif method_id == "sam_pixel":
-        distances = np.asarray(
-            [dm.pixel_spectral_angle_mapper(query, row) for row in library_matrix],
-            dtype=float,
-        )
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown classification method: {method_id}")
+    distances = np.asarray(score(query, library_matrix), dtype=float)
 
     finite_mask = np.isfinite(distances)
     if not np.all(finite_mask):
@@ -479,9 +468,11 @@ def run_pipeline(req: PipelineRequest, db: Session = Depends(get_db)):
     if len(req.mean_signal.wavelengths_nm) != len(req.mean_signal.values):
         raise HTTPException(status_code=400, detail="mean_signal wavelengths/values length mismatch")
 
-    known_methods = {m["id"] for m in METHODS}
-    if req.classification_method_id not in known_methods:
-        raise HTTPException(status_code=400, detail=f"Unknown classification method: {req.classification_method_id}")
+    if req.classification_method_id not in CLASSIFIERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown classification method: {req.classification_method_id}",
+        )
 
     query = np.asarray(req.mean_signal.values, dtype=float)
     library_matrix, pigment_names, library_wavelengths = _load_library_matrix(reference_library)

@@ -7,7 +7,7 @@ import uuid
 import numpy as np
 import pytest
 
-from app.analysis.classification.distance_metrics import DistanceMetrics
+from app.plugins.classification._metrics import DistanceMetrics
 from app.db.models import DerivedDataset, ProcessingOperation, SpectralExtraction, SpectralLibrary
 
 from conftest import upload_library, write_spectral_library
@@ -68,12 +68,28 @@ def test_klpd_grows_with_dissimilarity():
 # --- method + library registries -----------------------------------------------------------
 
 
-def test_methods_endpoint_lists_the_implemented_metrics(client):
+def test_methods_endpoint_is_unchanged_by_the_registry(client):
+    """The plug-in registry must serve exactly what the hand-written METHODS list did.
+
+    Same ids, same labels, same order — the UI dropdown renders this directly. Only the
+    additive `higher_is_better` is new.
+    """
     methods = client.get("/api/classification/methods").json()["methods"]
-    ids = {m["id"] for m in methods}
-    # The paper names KL pseudo-divergence, SAM and cosine distance as what is implemented.
-    assert {"klpd", "sam_matrix", "cosine_matrix"} <= ids
-    assert all("label" in m for m in methods)
+    assert [{"id": m["id"], "label": m["label"]} for m in methods] == [
+        {"id": "sam_matrix", "label": "SAM (matrix)"},
+        {"id": "cosine_matrix", "label": "Cosine distance (matrix)"},
+        {"id": "klpd", "label": "KL pseudo-divergence"},
+        {"id": "sam_pixel", "label": "SAM (pixel)"},
+    ]
+    # Every metric here is a distance, so ranking stays lowest-first.
+    assert all(m["higher_is_better"] is False for m in methods)
+
+
+def test_every_registered_method_is_reachable_through_the_pipeline(client, hsi, library):
+    """Registering a method must be all it takes — no dispatch table to update as well."""
+    for method in client.get("/api/classification/methods").json()["methods"]:
+        response = run_pipeline(client, hsi["id"], library["id"], method=method["id"])
+        assert response.status_code == 200, f"{method['id']}: {response.text}"
 
 
 def test_libraries_endpoint_is_empty_before_any_upload(client):
