@@ -473,11 +473,13 @@ def _geometry_to_svg(ann: dict) -> str:
     return json.dumps({"type": shape, "geometry": geom})  # fallback: keep it, non-SVG
 
 
-def _roi_column_values(dataset_id: str, ann: dict, cube: "HsiCube | None") -> tuple[uuid.UUID, dict]:
+def _roi_column_values(
+    dataset_id: str, ann: dict, cube: "HsiCube | None", external: "ExternalInput | None"
+) -> tuple[uuid.UUID, dict]:
     """Map a frontend annotation object onto the WADM RoiAnnotation columns.
 
-    When the dataset is an HSI cube present in the DB, the annotation is linked to it via the
-    `cube_id` FK and the WADM `target` becomes the cube IRI `urn:uuid:{cube_id}`. The full
+    An ROI targets exactly one source: the cube it was drawn on, or the raster input. Whichever
+    it is gets the FK, and the WADM `target` becomes that row's IRI `urn:uuid:{id}`. The full
     original object is also stored in `data` so the UI round-trips losslessly (WADM has no slot
     for structured geometry, colour, group id, etc.).
 
@@ -495,13 +497,16 @@ def _roi_column_values(dataset_id: str, ann: dict, cube: "HsiCube | None") -> tu
     body = item.get("title") or item.get("label") or item.get("description")
     now = datetime.now(timezone.utc)
     cube_id = cube.cube_id if cube is not None else None
-    target = f"urn:uuid:{cube_id}" if cube_id is not None else dataset_id
+    external_input_id = external.input_id if external is not None else None
+    source_id = cube_id or external_input_id
+    target = f"urn:uuid:{source_id}" if source_id is not None else dataset_id
     return roi_id, {
         "selector_type": "SvgSelector",
         "selector_value": _geometry_to_svg(item),
         "target": target,
         "dataset_id": dataset_id,
         "cube_id": cube_id,
+        "external_input_id": external_input_id,
         "body": body,
         "body_format": "text/plain" if body else None,
         "motivation": _motivation_to_str(item),
@@ -547,7 +552,9 @@ def _replace_dataset_annotations(db: Session, dataset_id: str, annotations: list
         row.roi_id: row
         for row in db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == dataset_id)
     }
-    cube = db.get(HsiCube, stable_id("cube", dataset_id))  # None for non-HSI / unsynced datasets
+    # Exactly one of these resolves for a dataset the database knows about.
+    cube = db.get(HsiCube, stable_id("cube", dataset_id))
+    external = db.get(ExternalInput, stable_id("input", dataset_id))
 
     seen: set[uuid.UUID] = set()
     # Every ROI that survives this save, paired with whether its geometry moved. Unmoved ROIs
@@ -558,7 +565,7 @@ def _replace_dataset_annotations(db: Session, dataset_id: str, annotations: list
     for ann in annotations:
         if not isinstance(ann, dict):
             continue
-        roi_id, values = _roi_column_values(dataset_id, ann, cube)
+        roi_id, values = _roi_column_values(dataset_id, ann, cube, external)
         if roi_id in seen:
             continue  # the payload listed one id twice; first occurrence wins
         seen.add(roi_id)

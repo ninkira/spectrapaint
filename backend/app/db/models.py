@@ -14,7 +14,7 @@ dataset id), replacing the previous per-dataset JSON files.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Integer, JSON, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -190,10 +190,26 @@ class RoiAnnotation(Base):
 
     # --- app linkage ---
     dataset_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # stable query key
+    # An ROI targets exactly one source. Which one it is decides what can be done with it:
+    # a cube yields spectra, an external input is annotation-only.
     cube_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("hsi_cubes.cube_id"), nullable=True
     )
+    external_input_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("external_inputs.input_id"), nullable=True
+    )
     cube: Mapped["HsiCube | None"] = relationship()
+    external_input: Mapped["ExternalInput | None"] = relationship()
+
+    __table_args__ = (
+        # At most one, not exactly one: rows already exist with neither, written whenever the
+        # dataset was not in the database at save time. Tightening this to exactly-one needs the
+        # PUT endpoint to reject an unresolvable dataset first, which is a behaviour change.
+        CheckConstraint(
+            "((cube_id IS NOT NULL) + (external_input_id IS NOT NULL)) <= 1",
+            name="single_source",
+        ),
+    )
 
     # --- app-native payload (kept for lossless UI round-trip) ---
     data: Mapped[dict] = mapped_column(JSON)

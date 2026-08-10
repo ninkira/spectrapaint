@@ -6,7 +6,13 @@ import uuid
 
 import pytest
 
-from app.db.models import ProcessingOperation, RoiAnnotation, SpectralExtraction
+from app.db.models import (
+    ExternalInput,
+    HsiCube,
+    ProcessingOperation,
+    RoiAnnotation,
+    SpectralExtraction,
+)
 from app.db.ids import stable_id
 
 
@@ -81,10 +87,43 @@ def test_annotations_on_a_visual_are_accepted(client, db, visual):
     """Cross-modal annotation: the ROI model spans every modality, not just HSI."""
     put_annotations(client, visual["id"], [rect_annotation()])
     row = db.query(RoiAnnotation).one()
+    external = db.query(ExternalInput).one()
+
     assert row.dataset_id == visual["id"]
-    # No cube to link to, so the WADM target degrades to the bare dataset id.
+    # The ROI targets the raster input, not a cube, and the WADM target is that row's IRI.
     assert row.cube_id is None
-    assert row.target == visual["id"]
+    assert row.external_input_id == external.input_id
+    assert row.target == f"urn:uuid:{external.input_id}"
+
+
+def test_an_roi_targets_exactly_one_source(client, db, hsi, visual):
+    """Fig. 3: an ROI is associated with one HSI Cube or one External Input, never both."""
+    put_annotations(client, hsi["id"], [rect_annotation()])
+    put_annotations(client, visual["id"], [rect_annotation()])
+
+    for row in db.query(RoiAnnotation).all():
+        assert (row.cube_id is not None) != (row.external_input_id is not None)
+
+
+def test_the_single_source_check_is_enforced(client, db, hsi, visual):
+    """The database refuses a row linked to both, not just the code path that writes them."""
+    from sqlalchemy.exc import IntegrityError
+
+    cube = db.query(HsiCube).one()
+    external = db.query(ExternalInput).one()
+    db.add(RoiAnnotation(
+        roi_id=uuid.uuid4(),
+        selector_type="SvgSelector",
+        selector_value="<rect/>",
+        target="both",
+        motivation="highlighting",
+        cube_id=cube.cube_id,
+        external_input_id=external.input_id,
+        data={},
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
 
 
 def test_legacy_json_annotations_are_imported_on_first_read(client, hsi):
