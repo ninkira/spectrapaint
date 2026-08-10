@@ -404,6 +404,7 @@ export default function WorkArea() {
           datasetId={dataset?.id ?? null}
           selectedRoiId={selectedRoiId}
           roiSpectraById={roiSpectraById}
+          roiExtraction={roiExtraction}
         >
           {/* children */}
         </PigmentClassificationModal>
