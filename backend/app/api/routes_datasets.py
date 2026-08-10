@@ -226,11 +226,44 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
     return None
 
 
+def _object_owners() -> dict[str, uuid.UUID]:
+    """`dataset_id` -> the object it depicts, reached through its acquisition.
+
+    Only built when a caller actually filters by object.
+    """
+    from ..db.database import SessionLocal
+
+    owners: dict[str, uuid.UUID] = {}
+    with SessionLocal() as db:
+        cubes = (
+            db.query(HsiCube.dataset_id, DataAcquisition.object_id)
+            .join(DataAcquisition, DataAcquisition.acquisition_id == HsiCube.acquisition_id)
+        )
+        inputs = (
+            db.query(ExternalInput.dataset_id, DataAcquisition.object_id)
+            .join(DataAcquisition, DataAcquisition.acquisition_id == ExternalInput.acquisition_id)
+        )
+        for dataset_id, object_id in list(cubes) + list(inputs):
+            if dataset_id:
+                owners[dataset_id] = object_id
+    return owners
+
+
 # General calls
 @router.get("/datasets", response_model=list[DatasetMeta])
-def list_datasets():
+def list_datasets(project_id: str | None = None, object_id: str | None = None):
+    """Every dataset, or only those in one project / of one object.
+
+    Both filters are optional and omitting them returns everything, so a client that knows
+    nothing about projects keeps working unchanged.
+    """
+    owners = _object_owners() if object_id else {}
     out: list[DatasetMeta] = []
     for id_, rec in registry().items():
+        if project_id and str(rec.get("project_id")) != project_id:
+            continue
+        if object_id and str(owners.get(id_)) != object_id:
+            continue
         meta = build_dataset_meta(id_, rec)
         if meta is not None:
             out.append(meta)

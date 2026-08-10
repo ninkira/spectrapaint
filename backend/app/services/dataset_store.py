@@ -22,9 +22,13 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from ..core.data.projects import DEFAULT_PROJECT_SLUG, dataset_owners
 from ..paths import APP_DATA_DIR, storage
 
-PROJECT_ID = "old_man"
+# Legacy aliases. Every pre-existing row belongs to this project and its keys are derived from
+# its slug, so the constants stay — but the registry now reads each dataset's real project from
+# the database rather than assuming this one.
+PROJECT_ID = DEFAULT_PROJECT_SLUG
 PROJECT_DIR = APP_DATA_DIR / PROJECT_ID
 
 
@@ -66,12 +70,20 @@ def _build_registry_from_db() -> dict[str, Any]:
 
     out: dict[str, Any] = {}
     with SessionLocal() as db:
+        owners = dataset_owners(db)
+
+        def owner(dataset_id: str) -> tuple[str, str]:
+            """The project a dataset belongs to, falling back to the legacy one."""
+            found = owners.get(dataset_id)
+            return (str(found[0]), found[1]) if found else (PROJECT_ID, PROJECT_NAME)
+
         for cube in db.query(HsiCube).all():
             dataset_id = cube.dataset_id or dataset_id_for_data_ref(cube.data_ref)
+            project_id, project_name = owner(dataset_id)
             out[dataset_id] = {
                 "name": cube.title or _default_name(cube.data_ref),
-                "project_id": PROJECT_ID,
-                "project_name": PROJECT_NAME,
+                "project_id": project_id,
+                "project_name": project_name,
                 "envi_hdr": str(storage.resolve(cube.data_ref)),
             }
 
@@ -79,10 +91,11 @@ def _build_registry_from_db() -> dict[str, Any]:
             dataset_id = inp.dataset_id or dataset_id_for_data_ref(inp.data_ref)
             if dataset_id in out:
                 continue
+            project_id, project_name = owner(dataset_id)
             rec: dict[str, Any] = {
                 "name": inp.title or _default_name(inp.data_ref),
-                "project_id": PROJECT_ID,
-                "project_name": PROJECT_NAME,
+                "project_id": project_id,
+                "project_name": project_name,
             }
             suffix = Path(inp.data_ref).suffix.lower()
             key = "tiff" if suffix in {".tif", ".tiff"} else "png" if suffix == ".png" else "jpg"
