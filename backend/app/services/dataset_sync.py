@@ -1,7 +1,7 @@
 """Sync the on-disk datasets (from dataset_store.registry()) into the DB backbone.
 
 Idempotent: every row uses a deterministic UUID (app.db.ids.stable_id), so this can run on
-every startup and simply keeps Project / Artefact / DataAcquisition / HsiCube / ExternalInput
+every startup and simply keeps Project / Object / DataAcquisition / HsiCube / ExternalInput
 in step with what's on disk. Large binaries stay on disk — we store paths relative to
 APP_DATA_DIR.
 """
@@ -17,7 +17,7 @@ from ..analysis.classification.reference_registry import list_reference_librarie
 from ..services.cube_loader import open_envi, read_metadata
 from ..services.dataset_store import registry
 from ..db.ids import stable_id
-from ..db.models import Artefact, DataAcquisition, ExternalInput, HsiCube, Project, SpectralLibrary
+from ..db.models import DataAcquisition, ExternalInput, HsiCube, Object, Project, SpectralLibrary
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ def sync_datasets_to_db(db: Session) -> dict[str, int]:
     """Upsert on-disk datasets into the DB. Idempotent; best-effort per record; returns counts."""
     reg = registry()
     if not reg:
-        return {"projects": 0, "artefacts": 0, "acquisitions": 0, "cubes": 0, "external_inputs": 0}
+        return {"projects": 0, "objects": 0, "acquisitions": 0, "cubes": 0, "external_inputs": 0}
 
     now = datetime.now(timezone.utc)
     # Current records all belong to one project; take its identity from the first record.
@@ -117,13 +117,14 @@ def sync_datasets_to_db(db: Session) -> dict[str, int]:
     project_name = first.get("project_name", pid)
 
     project_uuid = stable_id("project", pid)
-    artefact_uuid = stable_id("artefact", pid)
+    # Kind string stays "artefact" — it is hashed into the existing primary keys.
+    object_uuid = stable_id("artefact", pid)
     acq_uuid = stable_id("acq", f"{pid}:hsi")
 
     db.merge(Project(project_id=project_uuid, storage_root=pid, dc_title=project_name, created_at=now))
-    db.merge(Artefact(artefact_id=artefact_uuid, project_id=project_uuid,
+    db.merge(Object(object_id=object_uuid, project_id=project_uuid,
                       object_type="painting", dc_title=project_name, created_at=now))
-    db.merge(DataAcquisition(acquisition_id=acq_uuid, artefact_id=artefact_uuid,
+    db.merge(DataAcquisition(acquisition_id=acq_uuid, object_id=object_uuid,
                              capture_modality="HSI"))
 
     cubes = inputs = 0
@@ -182,7 +183,7 @@ def sync_datasets_to_db(db: Session) -> dict[str, int]:
             logger.warning("Skipping library %s: %s", lib.get("id"), exc)
 
     db.commit()
-    counts = {"projects": 1, "artefacts": 1, "acquisitions": 1,
+    counts = {"projects": 1, "objects": 1, "acquisitions": 1,
               "cubes": cubes, "external_inputs": inputs, "spectral_libraries": libs}
     logger.info("Dataset sync complete: %s", counts)
     return counts

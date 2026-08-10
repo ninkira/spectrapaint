@@ -4,7 +4,7 @@ The Data Manager "＋" button posts here. The endpoint:
   1. saves the uploaded bytes into the managed data folder (so the existing file-reading
      endpoints — /rgb, /visual, /metadata — work unchanged),
   2. reads what it can from the file (ENVI header for cubes, width/height for visuals),
-  3. writes the DB rows (Project/Artefact/DataAcquisition + HsiCube or ExternalInput),
+  3. writes the DB rows (Project/Object/DataAcquisition + HsiCube or ExternalInput),
   4. invalidates the registry cache so the new dataset appears immediately.
 
 Two shapes of upload:
@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from ..db.database import get_db
 from ..db.ids import stable_id
-from ..db.models import Artefact, DataAcquisition, ExternalInput, HsiCube, Project
+from ..db.models import DataAcquisition, ExternalInput, HsiCube, Object, Project
 from ..models.dataset_meta import DatasetMeta
 from ..paths import APP_DATA_DIR, storage
 from ..services.cube_loader import open_envi, read_full_metadata
@@ -108,25 +108,27 @@ def _dataset_id_for(path: Path) -> str:
     return rel.with_suffix("").as_posix().replace("/", "__")
 
 
-def _ensure_project_and_artefact(db: Session, now: datetime) -> tuple[uuid.UUID, uuid.UUID]:
+def _ensure_project_and_object(db: Session, now: datetime) -> tuple[uuid.UUID, uuid.UUID]:
     project_uuid = stable_id("project", PROJECT_ID)
-    artefact_uuid = stable_id("artefact", PROJECT_ID)
+    # The kind string stays "artefact" even though the entity is now Object: stable_id
+    # hashes it into the primary key, so changing it would stop matching every existing row.
+    object_uuid = stable_id("artefact", PROJECT_ID)
     db.merge(Project(
         project_id=project_uuid, storage_root=PROJECT_ID, dc_title=PROJECT_NAME, created_at=now,
     ))
-    db.merge(Artefact(
-        artefact_id=artefact_uuid, project_id=project_uuid,
+    db.merge(Object(
+        object_id=object_uuid, project_id=project_uuid,
         object_type="painting", dc_title=PROJECT_NAME, created_at=now,
     ))
-    return project_uuid, artefact_uuid
+    return project_uuid, object_uuid
 
 
 def _make_acquisition(
-    meta: UploadMetadata, artefact_uuid: uuid.UUID, modality: str, envi: bool
+    meta: UploadMetadata, object_uuid: uuid.UUID, modality: str, envi: bool
 ) -> DataAcquisition:
     return DataAcquisition(
         acquisition_id=uuid.uuid4(),
-        artefact_id=artefact_uuid,
+        object_id=object_uuid,
         capture_modality=modality,
         captured_at=meta.captured_at,
         instrument_id=meta.instrument_id,
@@ -185,8 +187,8 @@ def _handle_hsi(
         data_path.unlink(missing_ok=True)
         raise HTTPException(400, f"Could not read the ENVI header: {exc}") from exc
 
-    _project_uuid, artefact_uuid = _ensure_project_and_artefact(db, now)
-    acq = _make_acquisition(meta, artefact_uuid, modality="HSI", envi=True)
+    _project_uuid, object_uuid = _ensure_project_and_object(db, now)
+    acq = _make_acquisition(meta, object_uuid, modality="HSI", envi=True)
     db.add(acq)
 
     dataset_id = _dataset_id_for(hdr_path)
@@ -238,8 +240,8 @@ def _handle_visual(
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"Could not open the image: {exc}") from exc
 
-    project_uuid, artefact_uuid = _ensure_project_and_artefact(db, now)
-    acq = _make_acquisition(meta, artefact_uuid, modality=meta.target_modality, envi=False)
+    project_uuid, object_uuid = _ensure_project_and_object(db, now)
+    acq = _make_acquisition(meta, object_uuid, modality=meta.target_modality, envi=False)
     db.add(acq)
 
     dataset_id = _dataset_id_for(dest)
