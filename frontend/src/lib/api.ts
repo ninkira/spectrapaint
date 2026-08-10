@@ -226,3 +226,32 @@ export async function saveDatasetAnnotations(id: string, annotations: Annotation
   })
   if (!r.ok) throw new Error('Failed to save annotations')
 }
+
+export type RoiStats = {
+  n_pixels: number
+  mean: number[]
+  std: number[]
+  min?: number[]
+  max?: number[]
+}
+
+export type RoiExtraction = {
+  dataset_id: string
+  roi_id: string
+  wavelengths_nm: number[]
+  wavelength_range: string | null
+  extracted_at: string
+  stats: RoiStats
+}
+
+/** Spectra measured for a saved ROI. `null` when the ROI has none — an annotation on a
+ *  non-hyperspectral input, or one whose spectra were never measured. */
+export async function getRoiExtraction(
+  datasetId: string,
+  roiId: string,
+): Promise<RoiExtraction | null> {
+  const r = await fetch(`${base}/datasets/${datasetId}/annotations/${roiId}/extraction`)
+  if (r.status === 404) return null
+  if (!r.ok) throw new Error('Failed to load ROI spectra')
+  return await r.json() as RoiExtraction
+}

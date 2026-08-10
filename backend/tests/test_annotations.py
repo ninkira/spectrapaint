@@ -273,6 +273,48 @@ def test_a_malformed_geometry_still_saves_the_annotation(client, db, hsi):
     assert db.query(SpectralExtraction).count() == 0
 
 
+def test_extraction_endpoint_serves_a_saved_roi(client, hsi):
+    """W3-6: selecting a saved ROI reads its spectra back instead of finding nothing."""
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+
+    body = client.get(
+        f"/api/datasets/{hsi['id']}/annotations/{annotation['id']}/extraction"
+    ).json()
+
+    assert body["stats"]["n_pixels"] == 4
+    assert body["stats"]["mean"][0] == pytest.approx(55.0)
+    assert len(body["stats"]["std"]) == 5
+    assert body["wavelengths_nm"] == [400.0, 450.0, 500.0, 550.0, 600.0]
+    assert body["wavelength_range"] == "400.0-600.0 nm"
+
+
+def test_extraction_endpoint_404s_for_an_unmeasured_roi(client, visual):
+    """An ROI on an external input has no spectra, and says so rather than returning empty."""
+    annotation = rect_annotation()
+    put_annotations(client, visual["id"], [annotation])
+
+    response = client.get(
+        f"/api/datasets/{visual['id']}/annotations/{annotation['id']}/extraction"
+    )
+    assert response.status_code == 404
+
+
+def test_extraction_endpoint_hides_classification_placeholders(client, db, hsi):
+    """A pixel_count=0 row has a client-supplied mean and no std — not worth plotting."""
+    annotation = rect_annotation()
+    put_annotations(client, hsi["id"], [annotation])
+    row = db.query(SpectralExtraction).one()
+    row.pixel_count = 0
+    row.std_spectrum = []
+    db.commit()
+
+    response = client.get(
+        f"/api/datasets/{hsi['id']}/annotations/{annotation['id']}/extraction"
+    )
+    assert response.status_code == 404
+
+
 def test_duplicate_ids_in_one_payload_are_collapsed(client, db, hsi):
     roi_id = str(uuid.uuid4())
     response = put_annotations(client, hsi["id"], [

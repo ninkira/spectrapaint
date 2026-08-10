@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 
-from ..core.roi.extraction import ensure_extraction
+from ..core.roi.extraction import ensure_extraction, extraction_id_for
 from ..db.database import get_db
 from ..db.ids import stable_id
 from ..db.models import (
@@ -601,6 +601,43 @@ def get_annotations(id: str, db: Session = Depends(get_db)):
             _replace_dataset_annotations(db, id, legacy)
             rows = db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == id).all()
     return {"dataset_id": id, "annotations": [r.data for r in rows]}
+
+
+@router.get("/datasets/{id}/annotations/{roi_id}/extraction")
+def get_roi_extraction(id: str, roi_id: str, db: Session = Depends(get_db)):
+    """The spectra measured for a saved ROI, so selecting it does not re-read the cube.
+
+    Returns the stored aggregate — mean, standard deviation, min, max and pixel count — not the
+    per-pixel spectra. A 45,000-pixel ROI is tens of megabytes per-pixel but a few hundred
+    numbers as statistics, and the plot draws its mean line and sigma band from exactly these.
+    Callers that need the individual signals re-extract them from the cube on demand.
+    """
+    get_dataset_record_or_404(id)
+    extraction = db.get(SpectralExtraction, extraction_id_for(roi_id))
+    # pixel_count == 0 marks a placeholder written by a classification run on an ROI that was
+    # never measured: it carries a client-supplied mean and no statistics, so there is nothing
+    # here worth serving. Saving the annotation replaces it with a real measurement.
+    if extraction is None or not extraction.pixel_count:
+        raise HTTPException(
+            status_code=404,
+            detail="No spectral extraction for this ROI",
+        )
+
+    cube = db.get(HsiCube, stable_id("cube", id))
+    return {
+        "dataset_id": id,
+        "roi_id": roi_id,
+        "wavelengths_nm": (cube.wavelengths if cube else None) or [],
+        "wavelength_range": extraction.wavelength_range,
+        "extracted_at": extraction.extracted_at,
+        "stats": {
+            "n_pixels": extraction.pixel_count,
+            "mean": extraction.mean_spectrum,
+            "std": extraction.std_spectrum,
+            "min": extraction.min_spectrum,
+            "max": extraction.max_spectrum,
+        },
+    }
 
 
 @router.put("/datasets/{id}/annotations")
