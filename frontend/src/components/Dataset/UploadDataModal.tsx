@@ -307,7 +307,7 @@ interface UploadDataModalProps {
 }
 
 export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProps) {
-  const { refreshDatasets, setDatasetId } = useApp()
+  const { refreshDatasets, setDatasetId, projectId } = useApp()
 
   const [file, setFile] = useState<File | null>(null)
   const [binary, setBinary] = useState<File | null>(null)
@@ -460,6 +460,8 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
       processing_steps: s(form.processing_steps),
       dc_rights: s(form.dc_rights),
       created_at: s(form.created_at),
+      // Uploads land in the investigation the Data Manager is showing.
+      project_id: projectId,
     }
   }
 

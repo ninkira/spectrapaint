@@ -97,9 +97,58 @@ export async function getDatasetDbMeta(id: string): Promise<DatasetDbMeta> {
 export type DataKind = 'hsi' | 'visual'
 export type TargetModality = 'HSI' | 'XRF' | 'RGB' | 'other'
 
+// --- Projects and objects ----------------------------------------------------------------
+// One investigation can cover several physical objects; a dataset belongs to one of each.
+
+export type ProjectMeta = {
+  project_id: string
+  storage_root: string
+  created_at: string
+  dc_title: string
+  dc_creator?: string | null
+  dc_contributor?: string | null
+  dc_date?: string | null
+  dc_rights?: string | null
+  dc_description?: string | null
+}
+
+export type ObjectMeta = {
+  object_id: string
+  project_id: string
+  object_type: string
+  object_pid?: string | null
+  dc_title: string
+}
+
+export async function listProjects(): Promise<ProjectMeta[]> {
+  const r = await fetch(`${base}/projects`)
+  if (!r.ok) throw new Error('Failed to load projects')
+  return await r.json() as ProjectMeta[]
+}
+
+export async function createProject(dc_title: string): Promise<ProjectMeta> {
+  const r = await fetch(`${base}/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dc_title }),
+  })
+  if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? 'Failed to create project')
+  return await r.json() as ProjectMeta
+}
+
+export async function listObjects(projectId: string): Promise<ObjectMeta[]> {
+  const r = await fetch(`${base}/projects/${projectId}/objects`)
+  if (!r.ok) throw new Error('Failed to load objects')
+  return await r.json() as ObjectMeta[]
+}
+
 // Everything the upload modal can send. Mirrors the backend UploadMetadata model; only
 // data_kind + target_modality are required, the rest are optional metadata.
 export type UploadMetadata = {
+  /** Where the dataset belongs. Omitted, the backend uses the default project. */
+  project_id?: string
+  object_id?: string
+
   data_kind: DataKind
   target_modality: TargetModality
 
@@ -140,8 +189,9 @@ export type UploadMetadata = {
 
 const base = '/api';
 
-export async function listDatasets(): Promise<DatasetMeta[]> {
-  const r = await fetch(`${base}/datasets`);
+export async function listDatasets(projectId?: string): Promise<DatasetMeta[]> {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+  const r = await fetch(`${base}/datasets${query}`);
   if (!r.ok) throw new Error('Failed to list datasets');
   return r.json();
 }
