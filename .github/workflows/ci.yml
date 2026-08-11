@@ -51,27 +51,20 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements-runtime.txt
+          cache-dependency-path: |
+            backend/requirements-runtime.txt
+            backend/requirements-dev.txt
 
-      - name: Install runtime dependencies
-        # Use the lean runtime set (NOT requirements.txt, which is a dev mega-dump).
+      - name: Install dependencies
+        # requirements-dev.txt pulls in requirements-runtime.txt (the lean set PyInstaller
+        # bundles) and adds the test-only packages. NOT requirements.txt, a dev mega-dump.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-runtime.txt
-          pip install pytest
+          pip install -r requirements-dev.txt
 
       - name: Import smoke test
         # Catches syntax errors, bad imports, and missing runtime deps.
         run: python -c "import app.main; print('app.main imported OK')"
 
-      - name: Run tests (tolerates no tests yet)
-        run: |
-          set +e
-          pytest -q
-          code=$?
-          # 0 = passed, 5 = no tests collected. Anything else is a real failure.
-          if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then
-            [ "$code" -eq 5 ] && echo "No tests collected yet — add tests under backend."
-            exit 0
-          fi
-          exit "$code"
+      - name: Run tests
+        run: pytest -q

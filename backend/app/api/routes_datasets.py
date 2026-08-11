@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 
+from ..core.roi.extraction import ensure_extraction, extraction_id_for
 from ..db.database import get_db
 from ..db.ids import stable_id
 from ..db.models import (
@@ -151,6 +152,14 @@ def _read_visual_size(path: str) -> tuple[int, int]:
 
 
 def _to_relative_project_path(path: str) -> str:
+    """Path relative to the PROJECT folder, for `DatasetMeta.path`.
+
+    Deliberately not `storage.relativise`, which is relative to the data root. This value feeds
+    `buildLayerTree` in the frontend, which splits it on "/" to build the Data Manager tree, so
+    rebasing it would insert a project level into that tree. That is the right end state, but it
+    belongs with the change that removes the hardcoded project and adds a project selector —
+    not here, where it would just be an unexplained extra folder.
+    """
     p = Path(path).resolve()
     try:
         return p.relative_to(PROJECT_ROOT.resolve()).as_posix()
@@ -217,11 +226,44 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
     return None
 
 
+def _object_owners() -> dict[str, uuid.UUID]:
+    """`dataset_id` -> the object it depicts, reached through its acquisition.
+
+    Only built when a caller actually filters by object.
+    """
+    from ..db.database import SessionLocal
+
+    owners: dict[str, uuid.UUID] = {}
+    with SessionLocal() as db:
+        cubes = (
+            db.query(HsiCube.dataset_id, DataAcquisition.object_id)
+            .join(DataAcquisition, DataAcquisition.acquisition_id == HsiCube.acquisition_id)
+        )
+        inputs = (
+            db.query(ExternalInput.dataset_id, DataAcquisition.object_id)
+            .join(DataAcquisition, DataAcquisition.acquisition_id == ExternalInput.acquisition_id)
+        )
+        for dataset_id, object_id in list(cubes) + list(inputs):
+            if dataset_id:
+                owners[dataset_id] = object_id
+    return owners
+
+
 # General calls
 @router.get("/datasets", response_model=list[DatasetMeta])
-def list_datasets():
+def list_datasets(project_id: str | None = None, object_id: str | None = None):
+    """Every dataset, or only those in one project / of one object.
+
+    Both filters are optional and omitting them returns everything, so a client that knows
+    nothing about projects keeps working unchanged.
+    """
+    owners = _object_owners() if object_id else {}
     out: list[DatasetMeta] = []
     for id_, rec in registry().items():
+        if project_id and str(rec.get("project_id")) != project_id:
+            continue
+        if object_id and str(owners.get(id_)) != object_id:
+            continue
         meta = build_dataset_meta(id_, rec)
         if meta is not None:
             out.append(meta)
@@ -331,17 +373,10 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
         .filter(RoiAnnotation.dataset_id == dataset_id).all()
     ]
     if roi_ids:
-        ext_ids = [
-            r[0] for r in db.query(SpectralExtraction.extraction_id)
-            .filter(SpectralExtraction.roi_id.in_(roi_ids)).all()
-        ]
-        if ext_ids:
-            db.query(ProcessingOperation).filter(
-                ProcessingOperation.input_extraction_id.in_(ext_ids)
-            ).update({ProcessingOperation.input_extraction_id: None}, synchronize_session=False)
-            db.query(SpectralExtraction).filter(
-                SpectralExtraction.extraction_id.in_(ext_ids)
-            ).delete(synchronize_session=False)
+        _detach_operations_from_roi_extractions(db, roi_ids)
+        db.query(SpectralExtraction).filter(
+            SpectralExtraction.roi_id.in_(roi_ids)
+        ).delete(synchronize_session=False)
         db.query(RoiAnnotation).filter(
             RoiAnnotation.roi_id.in_(roi_ids)
         ).delete(synchronize_session=False)
@@ -471,13 +506,18 @@ def _geometry_to_svg(ann: dict) -> str:
     return json.dumps({"type": shape, "geometry": geom})  # fallback: keep it, non-SVG
 
 
-def _build_roi_row(dataset_id: str, ann: dict, cube: "HsiCube | None") -> RoiAnnotation:
+def _roi_column_values(
+    dataset_id: str, ann: dict, cube: "HsiCube | None", external: "ExternalInput | None"
+) -> tuple[uuid.UUID, dict]:
     """Map a frontend annotation object onto the WADM RoiAnnotation columns.
 
-    When the dataset is an HSI cube present in the DB, the annotation is linked to it via the
-    `cube_id` FK and the WADM `target` becomes the cube IRI `urn:uuid:{cube_id}`. The full
+    An ROI targets exactly one source: the cube it was drawn on, or the raster input. Whichever
+    it is gets the FK, and the WADM `target` becomes that row's IRI `urn:uuid:{id}`. The full
     original object is also stored in `data` so the UI round-trips losslessly (WADM has no slot
     for structured geometry, colour, group id, etc.).
+
+    Returns the ROI id separately from the column payload so the same mapping can either build
+    a new row or be applied on top of an existing one.
     """
     item = dict(ann)
     item["datasetId"] = dataset_id
@@ -490,38 +530,104 @@ def _build_roi_row(dataset_id: str, ann: dict, cube: "HsiCube | None") -> RoiAnn
     body = item.get("title") or item.get("label") or item.get("description")
     now = datetime.now(timezone.utc)
     cube_id = cube.cube_id if cube is not None else None
-    target = f"urn:uuid:{cube_id}" if cube_id is not None else dataset_id
-    return RoiAnnotation(
-        roi_id=roi_id,
-        selector_type="SvgSelector",
-        selector_value=_geometry_to_svg(item),
-        target=target,
-        dataset_id=dataset_id,
-        cube_id=cube_id,
-        body=body,
-        body_format="text/plain" if body else None,
-        motivation=_motivation_to_str(item),
-        creator=item.get("creator"),
-        created=_parse_dt(item.get("createdAt")) or now,
-        modified=_parse_dt(item.get("updatedAt")),
-        generator="SpectraPaint",
-        generated=now,
-        data=item,
-    )
+    external_input_id = external.input_id if external is not None else None
+    source_id = cube_id or external_input_id
+    target = f"urn:uuid:{source_id}" if source_id is not None else dataset_id
+    return roi_id, {
+        "selector_type": "SvgSelector",
+        "selector_value": _geometry_to_svg(item),
+        "target": target,
+        "dataset_id": dataset_id,
+        "cube_id": cube_id,
+        "external_input_id": external_input_id,
+        "body": body,
+        "body_format": "text/plain" if body else None,
+        "motivation": _motivation_to_str(item),
+        "creator": item.get("creator"),
+        "created": _parse_dt(item.get("createdAt")) or now,
+        "modified": _parse_dt(item.get("updatedAt")),
+        "generator": "SpectraPaint",
+        "generated": now,
+        "data": item,
+    }
+
+
+def _detach_operations_from_roi_extractions(db: Session, roi_ids: list[uuid.UUID]) -> None:
+    """Unlink classification runs from the extractions of ROIs that are about to be deleted.
+
+    A ProcessingOperation points at the SpectralExtraction it consumed. Removing the extraction
+    would otherwise trip that foreign key, so the run is detached first — the history row itself
+    survives, which is the whole reason for keeping it.
+    """
+    if not roi_ids:
+        return
+    ext_ids = [
+        r[0] for r in db.query(SpectralExtraction.extraction_id)
+        .filter(SpectralExtraction.roi_id.in_(roi_ids)).all()
+    ]
+    if not ext_ids:
+        return
+    db.query(ProcessingOperation).filter(
+        ProcessingOperation.input_extraction_id.in_(ext_ids)
+    ).update({ProcessingOperation.input_extraction_id: None}, synchronize_session=False)
 
 
 def _replace_dataset_annotations(db: Session, dataset_id: str, annotations: list[dict]) -> int:
-    """Replace all annotations for a dataset with the given list (mirrors old file semantics)."""
-    db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == dataset_id).delete()
-    cube = db.get(HsiCube, stable_id("cube", dataset_id))  # None for non-HSI / unsynced datasets
-    count = 0
+    """Make the stored annotations for a dataset match `annotations`.
+
+    A diff keyed on `roi_id` rather than a delete-and-recreate, for two reasons. A bulk delete
+    bypasses the ORM cascade to SpectralExtraction, and with `PRAGMA foreign_keys=ON` the
+    orphaned extraction then blocks the delete outright. And rebuilding every row on each save
+    would discard the WADM `created` timestamp plus the extraction a saved ROI had triggered,
+    even for annotations the user never touched.
+    """
+    existing = {
+        row.roi_id: row
+        for row in db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == dataset_id)
+    }
+    # Exactly one of these resolves for a dataset the database knows about.
+    cube = db.get(HsiCube, stable_id("cube", dataset_id))
+    external = db.get(ExternalInput, stable_id("input", dataset_id))
+
+    seen: set[uuid.UUID] = set()
+    # Every ROI that survives this save, paired with whether its geometry moved. Unmoved ROIs
+    # are still passed through so a missing extraction gets filled in; `ensure_extraction`
+    # short-circuits when one is already on record.
+    kept: list[tuple[RoiAnnotation, bool]] = []
+
     for ann in annotations:
         if not isinstance(ann, dict):
             continue
-        db.add(_build_roi_row(dataset_id, ann, cube))
-        count += 1
+        roi_id, values = _roi_column_values(dataset_id, ann, cube, external)
+        if roi_id in seen:
+            continue  # the payload listed one id twice; first occurrence wins
+        seen.add(roi_id)
+
+        row = existing.get(roi_id)
+        if row is None:
+            row = RoiAnnotation(roi_id=roi_id, **values)
+            db.add(row)
+            kept.append((row, True))
+            continue
+
+        previous_geometry = (row.data or {}).get("geometry")
+        # `created` is the WADM creation time and belongs to the original row, not this save.
+        del values["created"]
+        for column, value in values.items():
+            setattr(row, column, value)
+        kept.append((row, previous_geometry != (row.data or {}).get("geometry")))
+
+    removed = [roi_id for roi_id in existing if roi_id not in seen]
+    _detach_operations_from_roi_extractions(db, removed)
+    for roi_id in removed:
+        db.delete(existing[roi_id])  # ORM delete, so the cascade to SpectralExtraction fires
+
+    db.flush()  # the ROI rows must exist before an extraction can reference them
+    for row, geometry_changed in kept:
+        ensure_extraction(db, row, cube, recompute=geometry_changed)
+
     db.commit()
-    return count
+    return len(seen)
 
 
 @router.get("/datasets/{id}/annotations")
@@ -535,6 +641,43 @@ def get_annotations(id: str, db: Session = Depends(get_db)):
             _replace_dataset_annotations(db, id, legacy)
             rows = db.query(RoiAnnotation).filter(RoiAnnotation.dataset_id == id).all()
     return {"dataset_id": id, "annotations": [r.data for r in rows]}
+
+
+@router.get("/datasets/{id}/annotations/{roi_id}/extraction")
+def get_roi_extraction(id: str, roi_id: str, db: Session = Depends(get_db)):
+    """The spectra measured for a saved ROI, so selecting it does not re-read the cube.
+
+    Returns the stored aggregate — mean, standard deviation, min, max and pixel count — not the
+    per-pixel spectra. A 45,000-pixel ROI is tens of megabytes per-pixel but a few hundred
+    numbers as statistics, and the plot draws its mean line and sigma band from exactly these.
+    Callers that need the individual signals re-extract them from the cube on demand.
+    """
+    get_dataset_record_or_404(id)
+    extraction = db.get(SpectralExtraction, extraction_id_for(roi_id))
+    # pixel_count == 0 marks a placeholder written by a classification run on an ROI that was
+    # never measured: it carries a client-supplied mean and no statistics, so there is nothing
+    # here worth serving. Saving the annotation replaces it with a real measurement.
+    if extraction is None or not extraction.pixel_count:
+        raise HTTPException(
+            status_code=404,
+            detail="No spectral extraction for this ROI",
+        )
+
+    cube = db.get(HsiCube, stable_id("cube", id))
+    return {
+        "dataset_id": id,
+        "roi_id": roi_id,
+        "wavelengths_nm": (cube.wavelengths if cube else None) or [],
+        "wavelength_range": extraction.wavelength_range,
+        "extracted_at": extraction.extracted_at,
+        "stats": {
+            "n_pixels": extraction.pixel_count,
+            "mean": extraction.mean_spectrum,
+            "std": extraction.std_spectrum,
+            "min": extraction.min_spectrum,
+            "max": extraction.max_spectrum,
+        },
+    }
 
 
 @router.put("/datasets/{id}/annotations")

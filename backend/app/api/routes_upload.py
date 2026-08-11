@@ -4,7 +4,7 @@ The Data Manager "＋" button posts here. The endpoint:
   1. saves the uploaded bytes into the managed data folder (so the existing file-reading
      endpoints — /rgb, /visual, /metadata — work unchanged),
   2. reads what it can from the file (ENVI header for cubes, width/height for visuals),
-  3. writes the DB rows (Project/Artefact/DataAcquisition + HsiCube or ExternalInput),
+  3. writes the DB rows (Project/Object/DataAcquisition + HsiCube or ExternalInput),
   4. invalidates the registry cache so the new dataset appears immediately.
 
 Two shapes of upload:
@@ -26,9 +26,10 @@ from sqlalchemy.orm import Session
 
 from ..db.database import get_db
 from ..db.ids import stable_id
-from ..db.models import Artefact, DataAcquisition, ExternalInput, HsiCube, Project
+from ..core.data.projects import resolve_project_and_object
+from ..db.models import DataAcquisition, ExternalInput, HsiCube
 from ..models.dataset_meta import DatasetMeta
-from ..paths import APP_DATA_DIR
+from ..paths import APP_DATA_DIR, storage
 from ..services.cube_loader import open_envi, read_full_metadata
 from ..services.dataset_store import (
     PROJECT_ID,
@@ -51,6 +52,10 @@ class UploadMetadata(BaseModel):
     data_kind: Literal["hsi", "visual"]
     target_modality: Literal["HSI", "XRF", "RGB", "other"]
     title: str | None = None  # user-facing display label for the dataset
+    # Where this dataset belongs. Both optional: omitting them lands it in the default
+    # project, which is what every client did before projects existed.
+    project_id: uuid.UUID | None = None
+    object_id: uuid.UUID | None = None
     linked_dataset_id: str | None = None  # visual belongs to / derived from this dataset
 
     # External-input basics (also reused on the acquisition where the columns overlap).
@@ -99,42 +104,32 @@ def _unique_path(folder: Path, stem: str, ext: str) -> Path:
     return candidate
 
 
-def _rel(path: Path) -> str:
-    """Path relative to APP_DATA_DIR (portable) — matches how existing rows store data_ref."""
-    try:
-        return path.resolve().relative_to(APP_DATA_DIR.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _dataset_id_for(path: Path) -> str:
+def _dataset_id_for(path: Path, project_dir: Path = PROJECT_DIR) -> str:
     """Same scheme dataset_store uses: project-relative, no suffix, '/'→'__'."""
     try:
-        rel = path.resolve().relative_to(PROJECT_DIR.resolve())
+        rel = path.resolve().relative_to(project_dir.resolve())
     except ValueError:
         rel = Path(path.name)
     return rel.with_suffix("").as_posix().replace("/", "__")
 
 
-def _ensure_project_and_artefact(db: Session, now: datetime) -> tuple[uuid.UUID, uuid.UUID]:
-    project_uuid = stable_id("project", PROJECT_ID)
-    artefact_uuid = stable_id("artefact", PROJECT_ID)
-    db.merge(Project(
-        project_id=project_uuid, storage_root=PROJECT_ID, dc_title=PROJECT_NAME, created_at=now,
-    ))
-    db.merge(Artefact(
-        artefact_id=artefact_uuid, project_id=project_uuid,
-        object_type="painting", dc_title=PROJECT_NAME, created_at=now,
-    ))
-    return project_uuid, artefact_uuid
+def _resolve_destination(
+    db: Session, meta: "UploadMetadata", now: datetime
+) -> tuple[uuid.UUID, uuid.UUID, Path]:
+    """The project and object this upload belongs to, and the folder to store it under."""
+    try:
+        project, obj = resolve_project_and_object(db, meta.project_id, meta.object_id, now)
+    except LookupError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return project.project_id, obj.object_id, APP_DATA_DIR / project.storage_root
 
 
 def _make_acquisition(
-    meta: UploadMetadata, artefact_uuid: uuid.UUID, modality: str, envi: bool
+    meta: UploadMetadata, object_uuid: uuid.UUID, modality: str, envi: bool
 ) -> DataAcquisition:
     return DataAcquisition(
         acquisition_id=uuid.uuid4(),
-        artefact_id=artefact_uuid,
+        object_id=object_uuid,
         capture_modality=modality,
         captured_at=meta.captured_at,
         instrument_id=meta.instrument_id,
@@ -177,7 +172,8 @@ def _handle_hsi(
 ) -> DatasetMeta:
     if data is None:
         raise HTTPException(400, "An ENVI upload needs both the .hdr header and its binary cube")
-    folder = PROJECT_DIR / "hsi"
+    _project_uuid, object_uuid, project_dir = _resolve_destination(db, meta, now)
+    folder = project_dir / "hsi"
     stem = _safe_stem(header.filename or "cube")
     hdr_path = _unique_path(folder, stem, ".hdr")
     data_ext = Path(data.filename or "").suffix or ".img"
@@ -193,15 +189,15 @@ def _handle_hsi(
         data_path.unlink(missing_ok=True)
         raise HTTPException(400, f"Could not read the ENVI header: {exc}") from exc
 
-    _project_uuid, artefact_uuid = _ensure_project_and_artefact(db, now)
-    acq = _make_acquisition(meta, artefact_uuid, modality="HSI", envi=True)
+    acq = _make_acquisition(meta, object_uuid, modality="HSI", envi=True)
     db.add(acq)
 
-    dataset_id = _dataset_id_for(hdr_path)
+    dataset_id = _dataset_id_for(hdr_path, project_dir)
     db.merge(HsiCube(
         cube_id=stable_id("cube", dataset_id),
         acquisition_id=acq.acquisition_id,
-        data_ref=_rel(hdr_path),
+        data_ref=storage.relativise(hdr_path),
+        dataset_id=dataset_id,
         title=(meta.title.strip() if meta.title and meta.title.strip() else None),
         created_at=now,
         samples=full["samples"],
@@ -233,7 +229,8 @@ def _handle_visual(
     if ext not in VISUAL_EXTS:
         raise HTTPException(400, f"Unsupported visual file type: {ext or '(none)'}")
 
-    folder = PROJECT_DIR / FOLDER_BY_MODALITY[meta.target_modality]
+    project_uuid, object_uuid, project_dir = _resolve_destination(db, meta, now)
+    folder = project_dir / FOLDER_BY_MODALITY[meta.target_modality]
     stem = _safe_stem(file.filename or "image")
     dest = _unique_path(folder, stem, ext)
     _save_upload(file, dest)
@@ -245,15 +242,15 @@ def _handle_visual(
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"Could not open the image: {exc}") from exc
 
-    project_uuid, artefact_uuid = _ensure_project_and_artefact(db, now)
-    acq = _make_acquisition(meta, artefact_uuid, modality=meta.target_modality, envi=False)
+    acq = _make_acquisition(meta, object_uuid, modality=meta.target_modality, envi=False)
     db.add(acq)
 
-    dataset_id = _dataset_id_for(dest)
+    dataset_id = _dataset_id_for(dest, project_dir)
     db.merge(ExternalInput(
         input_id=stable_id("input", dataset_id),
         project_id=project_uuid,
         acquisition_id=acq.acquisition_id,
+        dataset_id=dataset_id,
         title=(meta.title.strip() if meta.title and meta.title.strip() else None),
         linked_dataset_id=meta.linked_dataset_id or None,
         source_tool=meta.source_tool or "user upload",
@@ -261,7 +258,7 @@ def _handle_visual(
         file_format=ext.lstrip("."),
         width=width,
         height_px=height,
-        data_ref=_rel(dest),
+        data_ref=storage.relativise(dest),
         capture_date=meta.capture_date,
         camera_model=meta.camera_model,
         instrument_id=meta.instrument_id,

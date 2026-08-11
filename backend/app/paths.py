@@ -13,6 +13,8 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 
+from .core.storage.local import LocalFilesystemStorage
+
 # --- Read-only bundled resources ---------------------------------------------------------
 if getattr(sys, "frozen", False):
     # PyInstaller unpacks bundled data files into this temp dir at runtime.
@@ -75,3 +77,8 @@ elif getattr(sys, "frozen", False):
 else:
     APP_DATA_DIR = Path(__file__).resolve().parents[1] / "app" / "data"
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# --- Storage backend ----------------------------------------------------------------------
+# Every translation between a stored `data_ref` and a real location goes through this, so the
+# layout policy lives in one place rather than being re-derived in each route.
+storage = LocalFilesystemStorage(APP_DATA_DIR)

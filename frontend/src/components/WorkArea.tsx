@@ -34,6 +34,8 @@ export default function WorkArea() {
     selectedSpectra: globalSelectedSpectra,
     selectedRoiId,
     roiSpectraById,
+    roiExtractionById,
+    loadRoiExtraction,
     selectedProbePointId,
     selectedProbeGroupId,
     probeSpectraByGroupId,
@@ -70,6 +72,17 @@ export default function WorkArea() {
     }
     return regionSpectra.length ? regionSpectra : globalSelectedSpectra
   }, [selectionMode, globalSelectedSpectra, selectedProbeGroupId, probeSpectraByGroupId, selectedRoiId, roiSpectraById, regionSpectra])
+
+  // An ROI drawn in this session already has its per-pixel spectra in memory. One loaded from
+  // the database has none, so fetch the statistics measured when it was saved. Done here rather
+  // than in each shape's click handler so there is one trigger instead of five.
+  useEffect(() => {
+    if (!dataset || !selectedRoiId) return
+    if ((roiSpectraById[selectedRoiId] ?? []).length) return
+    void loadRoiExtraction(dataset.id, selectedRoiId)
+  }, [dataset, selectedRoiId, roiSpectraById, loadRoiExtraction])
+
+  const roiExtraction = selectedRoiId ? (roiExtractionById[selectedRoiId] ?? null) : null
 
   const activeAnnotationId = selectedRoiId ?? selectedProbePointId
   const activeAnnotation = useMemo(
@@ -164,7 +177,16 @@ export default function WorkArea() {
           ? 'Region spectra (rectangle / ellipse / polygon)'
           : 'Selected spectra'
 
-    plot = <SpectrumPlot spectra={selectedSpectra} title={title} />
+    // `stats` wins over recomputing from per-pixel spectra, and is the only source a saved ROI
+    // has — its individual signals are not shipped to the browser.
+    plot = (
+      <SpectrumPlot
+        spectra={selectedSpectra}
+        stats={roiExtraction?.stats ?? null}
+        wavelengthsNm={roiExtraction?.wavelengths_nm}
+        title={title}
+      />
+    )
   }
 
   return (
@@ -382,6 +404,7 @@ export default function WorkArea() {
           datasetId={dataset?.id ?? null}
           selectedRoiId={selectedRoiId}
           roiSpectraById={roiSpectraById}
+          roiExtraction={roiExtraction}
         >
           {/* children */}
         </PigmentClassificationModal>

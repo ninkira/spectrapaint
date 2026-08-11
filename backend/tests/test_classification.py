@@ -1,0 +1,310 @@
+"""Classification: the distance metrics, the library registry, and the ETL provenance chain."""
+from __future__ import annotations
+
+import math
+import uuid
+
+import numpy as np
+import pytest
+
+from app.plugins.classification._metrics import DistanceMetrics
+from app.db.models import DerivedDataset, ProcessingOperation, SpectralExtraction, SpectralLibrary
+
+from conftest import upload_library, write_spectral_library
+
+WAVELENGTHS = [400.0, 450.0, 500.0, 550.0, 600.0]
+
+
+# --- distance metrics (pure functions) -----------------------------------------------------
+
+
+def test_sam_of_identical_spectra_is_zero():
+    spectrum = np.array([1.0, 2.0, 3.0, 4.0])
+    assert DistanceMetrics().pixel_spectral_angle_mapper(spectrum, spectrum) == pytest.approx(0.0, abs=1e-7)
+
+
+def test_sam_of_orthogonal_spectra_is_a_right_angle():
+    a = np.array([1.0, 0.0])
+    b = np.array([0.0, 1.0])
+    assert DistanceMetrics().pixel_spectral_angle_mapper(a, b) == pytest.approx(math.pi / 2)
+
+
+def test_sam_ignores_overall_scale():
+    """SAM compares shape, not brightness — doubling a spectrum must not change the angle."""
+    a = np.array([1.0, 2.0, 3.0])
+    assert DistanceMetrics().pixel_spectral_angle_mapper(a, a * 2.0) == pytest.approx(0.0, abs=1e-7)
+
+
+def test_matrix_sam_matches_the_pixel_implementation():
+    dm = DistanceMetrics()
+    query = np.array([1.0, 2.0, 3.0])
+    library = np.array([[1.0, 2.0, 3.0], [3.0, 2.0, 1.0], [0.0, 0.0, 1.0]])
+    matrix = dm.matrix_spectral_angle_mapper(np.repeat(query[None, :], 3, axis=0), library)
+    expected = [dm.pixel_spectral_angle_mapper(query, row) for row in library]
+    assert np.allclose(matrix, expected)
+
+
+def test_cosine_distance_of_identical_spectra_is_zero():
+    a = np.array([[1.0, 2.0, 3.0]])
+    assert DistanceMetrics().matrix_cosine_distance(a, a)[0] == pytest.approx(0.0, abs=1e-7)
+
+
+def test_klpd_of_identical_spectra_is_zero():
+    a = np.array([[1.0, 2.0, 3.0, 4.0]])
+    result = np.asarray(DistanceMetrics().klpd_spectral(a, a, mode=3)).reshape(-1)
+    assert result[0] == pytest.approx(0.0, abs=1e-7)
+
+
+def test_klpd_grows_with_dissimilarity():
+    dm = DistanceMetrics()
+    query = np.array([[1.0, 2.0, 3.0, 4.0]])
+    near = np.array([[1.0, 2.0, 3.0, 4.1]])
+    far = np.array([[9.0, 1.0, 5.0, 0.5]])
+    d_near = np.asarray(dm.klpd_spectral(query, near, mode=3)).reshape(-1)[0]
+    d_far = np.asarray(dm.klpd_spectral(query, far, mode=3)).reshape(-1)[0]
+    assert 0 <= d_near < d_far
+
+
+# --- method + library registries -----------------------------------------------------------
+
+
+def test_methods_endpoint_is_unchanged_by_the_registry(client):
+    """The plug-in registry must serve exactly what the hand-written METHODS list did.
+
+    Same ids, same labels, same order — the UI dropdown renders this directly. Only the
+    additive `higher_is_better` is new.
+    """
+    methods = client.get("/api/classification/methods").json()["methods"]
+    assert [{"id": m["id"], "label": m["label"]} for m in methods] == [
+        {"id": "sam_matrix", "label": "SAM (matrix)"},
+        {"id": "cosine_matrix", "label": "Cosine distance (matrix)"},
+        {"id": "klpd", "label": "KL pseudo-divergence"},
+        {"id": "sam_pixel", "label": "SAM (pixel)"},
+    ]
+    # Every metric here is a distance, so ranking stays lowest-first.
+    assert all(m["higher_is_better"] is False for m in methods)
+
+
+def test_every_registered_method_is_reachable_through_the_pipeline(client, hsi, library):
+    """Registering a method must be all it takes — no dispatch table to update as well."""
+    for method in client.get("/api/classification/methods").json()["methods"]:
+        response = run_pipeline(client, hsi["id"], library["id"], method=method["id"])
+        assert response.status_code == 200, f"{method['id']}: {response.text}"
+
+
+def test_libraries_endpoint_is_empty_before_any_upload(client):
+    assert client.get("/api/classification/libraries").json()["libraries"] == []
+
+
+def test_uploading_a_library_registers_it(client, db, library):
+    listed = client.get("/api/classification/libraries").json()["libraries"]
+    assert [item["id"] for item in listed] == [library["id"]]
+
+    row = db.query(SpectralLibrary).one()
+    assert row.number_of_bands == 5
+    assert row.num_spectra == 3
+    # Both of these come off the SpectralLibrary object rather than its metadata dict, which
+    # spectral empties on open — see upsert_spectral_library.
+    assert row.spectra_names == ["pigment_a", "pigment_b", "pigment_c"]
+    assert row.wavelengths == WAVELENGTHS
+
+
+def test_library_upload_rejects_a_non_hdr_header(client, tmp_path):
+    hdr = write_spectral_library(tmp_path / "lib.hdr")
+    with open(hdr, "rb") as handle:
+        response = client.post(
+            "/api/classification/libraries/upload",
+            files={
+                "header": ("lib.txt", handle, "text/plain"),
+                "data": ("lib.sli", b"\x00", "application/octet-stream"),
+            },
+        )
+    assert response.status_code == 400
+
+
+# --- the pipeline --------------------------------------------------------------------------
+
+
+_DEFAULT_SIGNAL = [1.0, 1.1, 1.2, 1.3, 1.4]
+
+
+def run_pipeline(client, dataset_id, library_id, *, roi_id=None, method="klpd", values=None, top_k=3):
+    # `values` is compared against None, not falsiness — an explicitly empty list is a valid
+    # input to test with.
+    signal = _DEFAULT_SIGNAL if values is None else values
+    return client.post("/api/classification/pipeline/run", json={
+        "dataset_id": dataset_id,
+        "roi_id": roi_id or str(uuid.uuid4()),
+        "classification_method_id": method,
+        "reference_library_id": library_id,
+        "mean_signal": {"wavelengths_nm": WAVELENGTHS[:len(signal)], "values": signal},
+        "top_k": top_k,
+    })
+
+
+@pytest.mark.parametrize("method", ["klpd", "sam_matrix", "cosine_matrix", "sam_pixel"])
+def test_pipeline_ranks_matches_for_every_method(client, hsi, library, method):
+    body = run_pipeline(client, hsi["id"], library["id"], method=method).json()
+    matches = body["results"]["top_matches"]
+
+    assert [m["rank"] for m in matches] == [1, 2, 3]
+    assert [m["score"] for m in matches] == sorted(m["score"] for m in matches)
+    assert {m["pigment_name"] for m in matches} == {"pigment_a", "pigment_b", "pigment_c"}
+    assert body["library"]["size"] == 3
+    assert body["library"]["bands"] == 5
+
+
+def test_pipeline_honours_top_k(client, hsi, library):
+    body = run_pipeline(client, hsi["id"], library["id"], top_k=2).json()
+    assert len(body["results"]["top_matches"]) == 2
+
+
+def test_pipeline_records_the_provenance_chain(client, db, hsi, library):
+    """Fig. 4 Load stage: ROI -> Spectral Extraction -> Processing Operation -> Derived Dataset."""
+    roi_id = str(uuid.uuid4())
+    run_pipeline(client, hsi["id"], library["id"], roi_id=roi_id)
+
+    extraction = db.query(SpectralExtraction).one()
+    operation = db.query(ProcessingOperation).one()
+    derived = db.query(DerivedDataset).one()
+
+    assert operation.operation_type == "classification"
+    assert operation.method_name == "klpd"
+    assert operation.parameters["reference_library_id"] == library["id"]
+    assert operation.input_extraction_id == extraction.extraction_id
+    assert derived.operation_id == operation.operation_id
+    assert derived.type == "classification"
+    assert derived.file_format == "json"
+    assert len(derived.class_names) == 3
+
+
+def test_classification_does_not_clobber_a_real_extraction(client, db, hsi, library):
+    """Saving the ROI extracted real statistics; a run must not overwrite them with placeholders."""
+    roi_id = str(uuid.uuid4())
+    client.put(f"/api/datasets/{hsi['id']}/annotations", json={"annotations": [{
+        "id": roi_id, "kind": "region", "type": "rect",
+        "geometry": {"x": 0, "y": 0, "w": 2, "h": 2},
+    }]})
+    before = db.query(SpectralExtraction).one()
+    assert before.pixel_count == 4
+
+    run_pipeline(client, hsi["id"], library["id"], roi_id=roi_id)
+
+    db.expire_all()
+    after = db.query(SpectralExtraction).one()
+    assert after.pixel_count == 4                      # not reset to 0
+    assert after.std_spectrum == before.std_spectrum   # not reset to []
+    assert after.library_id is not None                # the run is recorded against the library
+
+
+def test_pipeline_reads_the_query_from_the_persisted_extraction(client, db, hsi, library):
+    """W3-4: with no mean_signal the query comes from the stored prov:Entity, server-side."""
+    roi_id = str(uuid.uuid4())
+    client.put(f"/api/datasets/{hsi['id']}/annotations", json={"annotations": [{
+        "id": roi_id, "kind": "region", "type": "rect",
+        "geometry": {"x": 0, "y": 0, "w": 2, "h": 2},
+    }]})
+    stored = db.query(SpectralExtraction).one().mean_spectrum
+
+    body = client.post("/api/classification/pipeline/run", json={
+        "dataset_id": hsi["id"],
+        "roi_id": roi_id,
+        "classification_method_id": "klpd",
+        "reference_library_id": library["id"],
+        # no mean_signal
+    }).json()
+
+    assert body["results"]["query_source"] == "extraction"
+    assert body["mean_signal"]["values"] == pytest.approx(stored)
+    assert body["mean_signal"]["wavelengths_nm"] == WAVELENGTHS  # from the cube, not the client
+
+
+def test_pipeline_without_a_signal_or_an_extraction_explains_itself(client, hsi, library):
+    response = client.post("/api/classification/pipeline/run", json={
+        "dataset_id": hsi["id"],
+        "roi_id": str(uuid.uuid4()),
+        "classification_method_id": "klpd",
+        "reference_library_id": library["id"],
+    })
+    assert response.status_code == 400
+    assert "Save the annotation first" in response.json()["detail"]
+
+
+def test_pipeline_records_how_the_grids_were_aligned(client, db, hsi, library):
+    """A truncated run must stay distinguishable from a resampled one after the fact."""
+    run_pipeline(client, hsi["id"], library["id"])
+
+    operation = db.query(ProcessingOperation).one()
+    alignment = operation.parameters["alignment"]
+    assert alignment["mode"] == "resample"
+    assert alignment["n_bands"] == 5
+    assert alignment["overlap_nm"] == [400.0, 600.0]
+
+
+def test_pipeline_falls_back_to_truncation_and_says_so(client, tmp_path, hsi):
+    """A library with no wavelengths in its header still classifies, but the run records why."""
+    hdr = tmp_path / "nowl.hdr"
+    write_spectral_library(hdr)
+    # Strip the wavelength line so the header carries no spectral grid at all.
+    hdr.write_text(
+        "\n".join(l for l in hdr.read_text(encoding="utf-8").splitlines()
+                  if not l.startswith("wavelength =")) + "\n",
+        encoding="utf-8",
+    )
+    lib = upload_library(client, hdr, name="nowl_library")
+
+    body = run_pipeline(client, hsi["id"], lib["id"]).json()
+    alignment = body["results"]["alignment"]
+    assert alignment["mode"] == "truncate"
+    assert any("Wavelengths are missing" in w for w in alignment["warnings"])
+
+
+def test_classification_on_an_unsaved_roi_still_records_an_extraction(client, db, hsi, library):
+    """No ROI on record, so the client's mean signal is all there is to go on."""
+    run_pipeline(client, hsi["id"], library["id"])
+
+    extraction = db.query(SpectralExtraction).one()
+    assert extraction.roi_id is None
+    assert extraction.pixel_count == 0  # genuinely unknown, not measured
+
+
+def test_deleting_the_dataset_unwinds_the_provenance_chain(client, db, hsi, library):
+    """Deleting a dataset must unwind ROI -> extraction without tripping the operation's FK."""
+    roi_id = str(uuid.uuid4())
+    client.put(f"/api/datasets/{hsi['id']}/annotations", json={"annotations": [{
+        "id": roi_id, "kind": "region", "type": "rect",
+        "geometry": {"x": 0, "y": 0, "w": 2, "h": 2},
+    }]})
+    run_pipeline(client, hsi["id"], library["id"], roi_id=roi_id)
+    assert db.query(SpectralExtraction).count() == 1
+
+    assert client.delete(f"/api/datasets/{hsi['id']}").status_code == 200
+
+    db.expire_all()
+    assert db.query(SpectralExtraction).count() == 0
+    assert db.query(ProcessingOperation).one().input_extraction_id is None  # run history survives
+
+
+def test_pipeline_rejects_an_unknown_method(client, hsi, library):
+    assert run_pipeline(client, hsi["id"], library["id"], method="nope").status_code == 400
+
+
+def test_pipeline_rejects_an_empty_signal(client, hsi, library):
+    assert run_pipeline(client, hsi["id"], library["id"], values=[]).status_code == 400
+
+
+def test_pipeline_rejects_an_unknown_dataset(client, library):
+    assert run_pipeline(client, "no-such-dataset", library["id"]).status_code == 404
+
+
+def test_pipeline_refuses_a_library_with_no_spectral_overlap(client, hsi, tmp_path):
+    swir = upload_library(
+        client,
+        write_spectral_library(
+            tmp_path / "swir.hdr",
+            wavelengths=[1000.0, 1400.0, 1800.0, 2200.0, 2500.0],
+        ),
+        name="swir_library",
+    )
+    # The cube covers 400-600 nm; this library covers 1000-2500 nm. There is no overlap.
+    assert run_pipeline(client, hsi["id"], swir["id"]).status_code == 400

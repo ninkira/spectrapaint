@@ -1,7 +1,19 @@
-"""This class contains methods to calculate distance between data points, either in the form of matrices or individual signals."""
+"""Distance computations shared by the classification plug-ins.
+
+Underscore-prefixed because it is the plug-ins' private implementation, not an extension point:
+`sam.py`, `cosine.py` and `klpd.py` are what the registry knows about.
+"""
 
 import numpy as np
-from spectral.algorithms import spatial
+
+
+def tile_query(query: np.ndarray, library: np.ndarray) -> np.ndarray:
+    """Repeat a (B,) query into (N, B) so it can be compared row-wise against a library.
+
+    The matrix metrics below compare corresponding rows of two equally shaped matrices, so the
+    query has to be broadcast to the library's height first.
+    """
+    return np.repeat(np.asarray(query, dtype=float)[None, :], library.shape[0], axis=0)
 
 
 class DistanceMetrics:
@@ -52,62 +64,6 @@ class DistanceMetrics:
         cosine_distance = 1 - cosine_similarity
 
         return cosine_distance
-
-    # def matrix_pseudodiv_KL(self, A, B, resolution=1., mode=0):
-    #     """
-    #     Kullback-Leibler pseudo-divergence for spectral data, integration method is
-    #     assumed to be trapezoidal.
-    #
-    #     Parameters:
-    #     - `A`: reference matrix, of dimension rowxcolxwavelength.
-    #     - `B`: target matrix, of dimension rowxcolxwavelength.
-    #     - `mode`: whether to return both components (default, 0), shape(1),
-    #         energy(2), or total (summation, 3)
-    #
-    #     Return: distance matrix, of dimension rowxcol
-    #     """
-    #     if len(A.shape) == 1:
-    #         # This handles pairwise distance with this function as metric callable
-    #         A = A[np.newaxis, np.newaxis, :]
-    #         B = B[np.newaxis, np.newaxis, :]
-    #         # If mode is not setup, by default total klpd is given
-    #         if mode == 0:
-    #             mode = 3
-    #
-    #     kA, n_A = self.normalize_spectra(A, get_w=True, resolution=resolution)
-    #     kB, n_B = self.normalize_spectra(B, get_w=True, resolution=resolution)
-    #     shape = (kA * self.KL(n_A, n_B, resolution=resolution)) + (
-    #             kB * self.KL(n_B, n_A, resolution=resolution))
-    #     energy = (kA - kB) * (np.log(kA) - np.log(kB))
-    #
-    #     if mode == 0:
-    #         return np.concatenate((shape[:, :, None], energy[:, :, None]), axis=2)
-    #     elif mode == 1:
-    #         return shape
-    #     elif mode == 2:
-    #         return energy
-    #     else:
-    #         return shape + energy
-    #
-    # def KL(self, A, B, resolution=1.):
-    #     """
-    #     Kullback-Leibler, the original divergence. Input is assumed to be
-    #     normalized to one.
-    #
-    #     Parameters:
-    #     - `A`: reference matrix, of dimension rowxcolxwavelength.
-    #     - `B`: target matrix, of dimension rowxcolxwavelength.
-    #
-    #     Return: divergence matrix, of dimension rowxcol
-    #     """
-    #     scale = 1e6
-    #     #    test = len(A[A==0])+len(B[B==0])
-    #     #    if test > 0:
-    #     #        print '0 values:', test
-    #     part_A = np.nan_to_num(np.log(np.multiply(A, scale)) - np.log(scale))
-    #     part_B = np.nan_to_num(np.log(np.multiply(B, scale)) - np.log(scale))
-    #     div_KL = np.multiply(A, (part_A - part_B))
-    #     return np.trapz(div_KL, dx=resolution, axis=2)
 
     def normalize_spectra(self, spectra, get_w=False, resolution=None):
         # Normalize spectra for further calculations
@@ -177,10 +133,6 @@ class DistanceMetrics:
             return energy
         else:
             return shape + energy
-
-    def calculate_sam(self, pigment, pixel_spectra_list):
-        sam_result = np.arccos(1 - (spatial.distance.cosine(pigment, pixel_spectra_list)))
-        return sam_result
 
     def pixel_spectral_angle_mapper(self, pixel1, pixel2):
         """

@@ -6,7 +6,7 @@ Mapping notes (why each column type):
   * Large binaries (the actual HSI cube) are NEVER stored in the DB; we store the file path in
     `data_ref` and keep the bytes on disk (see app.paths.APP_DATA_DIR).
 
-Project → Artefact → DataAcquisition → HsiCube form the (currently empty) backbone that will
+Project → Object → DataAcquisition → HsiCube form the backbone that will
 model datasets in the DB later. RoiAnnotation is the first table the app actually writes to:
 it stores the annotation objects exactly as the frontend sends them (keyed by the string
 dataset id), replacing the previous per-dataset JSON files.
@@ -14,7 +14,7 @@ dataset id), replacing the previous per-dataset JSON files.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Integer, JSON, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -29,12 +29,19 @@ class Project(Base):
 
     project_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     storage_root: Mapped[str] = mapped_column(String)
-    dc_title: Mapped[str] = mapped_column(String)
-    dc_creator: Mapped[str | None] = mapped_column(String, nullable=True)
-    dc_description: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
-    artefacts: Mapped[list["Artefact"]] = relationship(
+    # Dublin Core — the selective subset that applies at project level: title, creator,
+    # contributor, date and rights. dc_rights is the placeholder for a licence assigned when
+    # the project is published.
+    dc_title: Mapped[str] = mapped_column(String)
+    dc_creator: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_contributor: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_rights: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_description: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    objects: Mapped[list["Object"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
     external_inputs: Mapped[list["ExternalInput"]] = relationship(
@@ -42,21 +49,43 @@ class Project(Base):
     )
 
 
-class Artefact(Base):
+class Object(Base):
     """EDM: ProvidedCHO — the physical/cultural object being investigated."""
 
-    __tablename__ = "artefacts"
+    __tablename__ = "objects"
 
-    artefact_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    object_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.project_id"))
-    object_type: Mapped[str] = mapped_column(String)
-    dc_title: Mapped[str] = mapped_column(String)
-    dc_description: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
-    project: Mapped["Project"] = relationship(back_populates="artefacts")
+    # What kind of artefact this is (painting, manuscript, …) — the system's own discriminator,
+    # distinct from the dc_type element below.
+    object_type: Mapped[str] = mapped_column(String)
+    # An external persistent identifier: a Wikidata URI, an institutional collection record.
+    # UUIDs are unique but not web-resolvable, so they are not PIDs in the FAIR sense; this is
+    # the bridge to an authoritative record. Maintaining it is the user's responsibility.
+    object_pid: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # All 15 Dublin Core elements, describing the physical object.
+    dc_title: Mapped[str] = mapped_column(String)
+    dc_creator: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_subject: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_description: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_publisher: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_contributor: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_format: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_identifier: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_language: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_relation: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_coverage: Mapped[str | None] = mapped_column(String, nullable=True)
+    dc_rights: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    project: Mapped["Project"] = relationship(back_populates="objects")
     acquisitions: Mapped[list["DataAcquisition"]] = relationship(
-        back_populates="artefact", cascade="all, delete-orphan"
+        back_populates="object_", cascade="all, delete-orphan"
     )
 
 
@@ -66,7 +95,7 @@ class DataAcquisition(Base):
     __tablename__ = "data_acquisitions"
 
     acquisition_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    artefact_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("artefacts.artefact_id"))
+    object_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("objects.object_id"))
     capture_modality: Mapped[str] = mapped_column(String)  # HSI | XRF | RGB
     captured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     instrument_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -88,7 +117,8 @@ class DataAcquisition(Base):
     envi_available: Mapped[bool] = mapped_column(default=False)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    artefact: Mapped["Artefact"] = relationship(back_populates="acquisitions")
+    # `object` is a builtin, so the attribute is `object_`; the column stays `object_id`.
+    object_: Mapped["Object"] = relationship(back_populates="acquisitions")
     cubes: Mapped[list["HsiCube"]] = relationship(
         back_populates="acquisition", cascade="all, delete-orphan"
     )
@@ -103,6 +133,10 @@ class HsiCube(Base):
     cube_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     acquisition_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("data_acquisitions.acquisition_id"))
     data_ref: Mapped[str] = mapped_column(String)  # path to the cube, relative to APP_DATA_DIR
+    # The app's string dataset id. Stored rather than re-derived from data_ref on every read:
+    # `stable_id("cube", dataset_id)` must keep reproducing this row's primary key, so the id has
+    # to be a stored fact that a later refactor of the path scheme cannot silently change.
+    dataset_id: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
     checksum: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -156,10 +190,26 @@ class RoiAnnotation(Base):
 
     # --- app linkage ---
     dataset_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # stable query key
+    # An ROI targets exactly one source. Which one it is decides what can be done with it:
+    # a cube yields spectra, an external input is annotation-only.
     cube_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("hsi_cubes.cube_id"), nullable=True
     )
+    external_input_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("external_inputs.input_id"), nullable=True
+    )
     cube: Mapped["HsiCube | None"] = relationship()
+    external_input: Mapped["ExternalInput | None"] = relationship()
+
+    __table_args__ = (
+        # At most one, not exactly one: rows already exist with neither, written whenever the
+        # dataset was not in the database at save time. Tightening this to exactly-one needs the
+        # PUT endpoint to reject an unresolvable dataset first, which is a behaviour change.
+        CheckConstraint(
+            "((cube_id IS NOT NULL) + (external_input_id IS NOT NULL)) <= 1",
+            name="single_source",
+        ),
+    )
 
     # --- app-native payload (kept for lossless UI round-trip) ---
     data: Mapped[dict] = mapped_column(JSON)
@@ -217,6 +267,8 @@ class ExternalInput(Base):
     acquisition_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("data_acquisitions.acquisition_id"), nullable=True
     )
+    # See HsiCube.dataset_id — same reasoning.
+    dataset_id: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
     # dataset this input belongs to / was derived from (e.g. a PNG render of an HSI cube).
     # Stored as the app's string dataset id (soft reference).

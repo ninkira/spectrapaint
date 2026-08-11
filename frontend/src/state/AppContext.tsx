@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { listDatasets, rgbUrl, visualUrl, saveDatasetAnnotations, getDatasetAnnotations } from '../lib/api';
+import { listDatasets, rgbUrl, visualUrl, saveDatasetAnnotations, getDatasetAnnotations, getRoiExtraction } from '../lib/api';
+import type { RoiExtraction } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import type { Layer } from './types'
@@ -54,6 +55,10 @@ type Ctx = {
   setSelectedRoiId: (id: string | null) => void
   roiSpectraById: Record<string, Spectrum[]>
   setRoiSpectraForId: (id: string, spectra: Spectrum[]) => void
+  // Statistics measured server-side when the ROI was saved. Populated on demand for ROIs
+  // loaded from the database, which have no per-pixel spectra in the browser.
+  roiExtractionById: Record<string, RoiExtraction | null>
+  loadRoiExtraction: (datasetId: string, roiId: string) => Promise<void>
 
 
   selectedProbeGroupId: string | null
@@ -187,6 +192,22 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     setRoiSpectraById(prev => ({ ...prev, [id]: spectra }))
   }
 
+  // Statistics measured when the ROI was saved. An ROI drawn in this session already has its
+  // per-pixel spectra in memory; one loaded from the database has nothing until we ask.
+  const [roiExtractionById, setRoiExtractionById] = useState<Record<string, RoiExtraction | null>>({})
+
+  const loadRoiExtraction = useCallback(async (datasetId: string, roiId: string) => {
+    // A cached `null` means the backend already told us this ROI has no spectra — do not ask
+    // again every time it is selected.
+    if (roiId in roiExtractionById) return
+    try {
+      const extraction = await getRoiExtraction(datasetId, roiId)
+      setRoiExtractionById(prev => ({ ...prev, [roiId]: extraction }))
+    } catch (err) {
+      console.error('Failed to load ROI spectra', err)
+    }
+  }, [roiExtractionById])
+
 
   // Reload the dataset list from the backend (used on mount and after an upload).
   const refreshDatasets = useCallback(async () => {
@@ -276,6 +297,8 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     setSelectedRoiId,
     roiSpectraById,
     setRoiSpectraForId,
+    roiExtractionById,
+    loadRoiExtraction,
 
     selectedProbeGroupId,
     setSelectedProbeGroupId,
@@ -311,6 +334,10 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     roiSpectraById,
     setSelectedRoiId,
     setRoiSpectraForId,
+    // Without these the memo hands back a stale value once an extraction resolves, and the
+    // plot never sees the spectra it just fetched.
+    roiExtractionById,
+    loadRoiExtraction,
     selectedProbeGroupId,
     probeSpectraByGroupId,
     setSelectedProbeGroupId,

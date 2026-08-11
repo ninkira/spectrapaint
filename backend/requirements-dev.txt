@@ -1,0 +1,6 @@
+# Test-only dependencies, on top of requirements-runtime.txt.
+# Not bundled by PyInstaller and not needed to run the app — CI installs both files.
+-r requirements-runtime.txt
+
+pytest
+httpx               # required by fastapi.testclient.TestClient
