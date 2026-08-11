@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { listDatasets, rgbUrl, visualUrl, saveDatasetAnnotations, getDatasetAnnotations, getRoiExtraction, listProjects, createProject } from '../lib/api';
-import type { ProjectMeta, RoiExtraction } from '../lib/api';
+import { listDatasets, rgbUrl, visualUrl, saveDatasetAnnotations, getDatasetAnnotations, getRoiExtraction } from '../lib/api';
+import type { RoiExtraction } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import type { Layer } from './types'
@@ -16,12 +16,6 @@ type Ctx = {
   // Layers
   fileLayers: Layer[];
   toggleLayer: (id: string) => void;
-
-  // project — the investigation currently in view. Datasets are scoped to it.
-  projects: ProjectMeta[];
-  projectId?: string;
-  setProjectId: (id: string) => void;
-  addProject: (title: string) => Promise<ProjectMeta>;
 
   // dataset
   dataset?: DatasetMeta;
@@ -95,13 +89,6 @@ export const useApp = () => {
 };
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-
-  const [projects, setProjects] = useState<ProjectMeta[]>([]);
-  // Which project is open is a per-browser preference, not server state — two windows may
-  // legitimately sit in different investigations.
-  const [projectId, setProjectIdState] = useState<string | undefined>(
-    () => localStorage.getItem('spectrapaint.projectId') ?? undefined,
-  );
 
   const [datasets, setDatasets] = useState<DatasetMeta[]>([]);
 const [dataset, setDataset] = useState<DatasetMeta>()
@@ -223,47 +210,15 @@ const [dataset, setDataset] = useState<DatasetMeta>()
 
 
   // Reload the dataset list from the backend (used on mount and after an upload).
-  const setProjectId = useCallback((id: string) => {
-    localStorage.setItem('spectrapaint.projectId', id)
-    setProjectIdState(id)
-  }, [])
-
   const refreshDatasets = useCallback(async () => {
-    const ds = await listDatasets(projectId);
+    const ds = await listDatasets();
     setDatasets(ds);
     return ds;
-  }, [projectId]);
+  }, []);
 
-  // Load the projects once, and settle on one. A stored choice that no longer exists — a
-  // deleted project, or a different machine — falls back to the first rather than showing
-  // an empty Data Manager with no way out.
-  useEffect(() => {
-    let cancelled = false
-    listProjects()
-      .then((loaded) => {
-        if (cancelled) return
-        setProjects(loaded)
-        const stored = localStorage.getItem('spectrapaint.projectId')
-        const chosen = loaded.find((p) => p.project_id === stored) ?? loaded[0]
-        if (chosen) setProjectId(chosen.project_id)
-      })
-      .catch((err) => console.error('Failed to load projects', err))
-    return () => { cancelled = true }
-  }, [setProjectId]);
-
-  const addProject = useCallback(async (title: string) => {
-    const created = await createProject(title)
-    setProjects((prev) => [...prev, created])
-    setProjectId(created.project_id)
-    return created
-  }, [setProjectId]);
-
-  // Re-runs when the project changes, because refreshDatasets closes over it.
   useEffect(() => {
     refreshDatasets().then(ds => {
-      // Keep the current dataset if the new project still contains it, otherwise fall to the
-      // first — switching investigations must not leave the previous one's image on screen.
-      setDatasetId(prev => (prev && ds.some(d => d.id === prev) ? prev : ds[0]?.id) as string);
+      if (ds.length) { setDatasetId(prev => prev ?? ds[0].id); }
     }).catch(console.error);
   }, [refreshDatasets]);
 
@@ -302,10 +257,6 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     // Layers
     fileLayers,
     toggleLayer,
-    projects,
-    projectId,
-    setProjectId,
-    addProject,
 
     // Dataset
     dataset,
@@ -364,10 +315,6 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     setPrimaryWidth,
 
   }), [
-    projects,
-    projectId,
-    setProjectId,
-    addProject,
     fileLayers,
     dataset,
     datasetId,

@@ -53,8 +53,7 @@ function buildLayerTree(layers: Layer[]): TreeNode[] {
 }
 
 export default function DataManager() {
-  const { fileLayers, toggleLayer, datasetId, setDatasetId, refreshDatasets,
-          projects, projectId, setProjectId, addProject } = useApp()
+  const { fileLayers, toggleLayer, datasetId, setDatasetId, refreshDatasets } = useApp()
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [uploadOpen, setUploadOpen] = useState(false)
   // Checkboxes are only shown while "Remove data" is armed.
@@ -203,31 +202,6 @@ export default function DataManager() {
             {removeMode && checkedIds.size > 0 ? <X size={18} /> : <Trash2 size={18} />}
           </button>
         </div>
-      </div>
-
-      {/* Which investigation is in view. Datasets, and anything uploaded, belong to it. */}
-      <div className="lm-project" style={{ display: 'flex', gap: 4, padding: '0.25rem 0.5rem' }}>
-        <select
-          aria-label="Project"
-          value={projectId ?? ''}
-          onChange={(e) => setProjectId(e.target.value)}
-          style={{ flex: 1, minWidth: 0 }}
-        >
-          {projects.map((p) => (
-            <option key={p.project_id} value={p.project_id}>{p.dc_title}</option>
-          ))}
-        </select>
-        <button
-          type="button"
-          title="New project"
-          aria-label="New project"
-          onClick={() => {
-            const title = window.prompt('Name for the new project')?.trim()
-            if (title) void addProject(title).catch((err) => window.alert(String(err)))
-          }}
-        >
-          +
-        </button>
       </div>
 
       <div className="lm-list" role="tree">
