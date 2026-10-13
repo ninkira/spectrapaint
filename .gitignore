@@ -18,6 +18,8 @@ backend/app/data/
 # IDE / local-only working docs
 .idea/
 docs/
+# Claude Code's worktrees and session state — tooling, not project source
+.claude/
 
 # Packaged build output (PyInstaller + Inno Setup), built at the repo top level
 /dist/
