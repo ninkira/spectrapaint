@@ -11,6 +11,7 @@ import {
   ZoomOut,
   RefreshCw,
   MapPinPlus,
+  Grid3x3,
 } from "lucide-react";
 
 import { useApp } from "../state/AppContext";
@@ -26,6 +27,8 @@ export default function Toolbar() {
     setNavigationMode,
     showSignalProcessing,
     setShowSignalProcessing,
+    showPixelGrid,
+    setShowPixelGrid,
     zoomIn,
     zoomOut,
     resetView,
@@ -67,6 +70,16 @@ export default function Toolbar() {
 
         <button aria-label="Zoom In" onClick={zoomIn}><ZoomIn size={20} /></button>
         <button aria-label="Zoom Out" onClick={zoomOut}><ZoomOut size={20} /></button>
+
+        <button
+          aria-label="Pixel grid"
+          title="Outline each image pixel (visible once zoomed in)"
+          aria-pressed={showPixelGrid}
+          className={showPixelGrid ? "active" : ""}
+          onClick={() => setShowPixelGrid(!showPixelGrid)}
+        >
+          <Grid3x3 size={20} />
+        </button>
 
         <span className="divider" />
 

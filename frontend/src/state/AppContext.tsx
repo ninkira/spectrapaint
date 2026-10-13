@@ -36,6 +36,10 @@ type Ctx = {
   setNavigationMode: (v: boolean) => void
   showSignalProcessing: boolean
   setShowSignalProcessing: (v: boolean) => void
+  /** Outline every image pixel. Only has a visible effect once zoomed in far enough for a
+   *  pixel to be worth outlining; see GRID_MIN_PIXEL_SIZE_PX in PrimaryDisplay. */
+  showPixelGrid: boolean
+  setShowPixelGrid: (v: boolean) => void
 
   // spetra
   selectedSpectra: Spectrum[];
@@ -146,6 +150,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
   const [selectionMode, setSelectionMode] = useState<SelectionMode | null>('single')
   const [navigationMode, setNavigationMode] = useState(false)
   const [showSignalProcessing, setShowSignalProcessing] = useState(false)
+  const [showPixelGrid, setShowPixelGrid] = useState(false)
   const [primaryWidth, setPrimaryWidth] = useState(600)
   const [view, setViewState] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
 
@@ -278,6 +283,8 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     setNavigationMode,
     showSignalProcessing,
     setShowSignalProcessing,
+    showPixelGrid,
+    setShowPixelGrid,
 
     // Spectra
     selectedSpectra,
@@ -325,6 +332,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     selectionMode,
     navigationMode,
     showSignalProcessing,
+    showPixelGrid,
     selectedSpectra,
     annotations,
     updateAnnotation,
