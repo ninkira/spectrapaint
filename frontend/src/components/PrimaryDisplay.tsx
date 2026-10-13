@@ -801,7 +801,6 @@ export default function PrimaryDisplay({
    *  most a hundred or so are ever visible. Emitted as one path rather than many elements. */
   const gridOverlay = useMemo(() => {
     void imgLoadTick  // re-render trigger: natural size is unknown until the image loads
-    if (!showPixelGrid) return null
     const img = imgRef.current
     const rect = cachedRect.current
     if (!img?.naturalWidth || !img.naturalHeight || !rect?.width || !rect.height) return null
