@@ -23,11 +23,21 @@ type Polygon = { id: string; vertices: ImagePoint[] }
 const PIXEL_MARKER_RADIUS_PX = 2  // minimum visible size of a pixel dot when zoomed out
 const PROBE_HIT_RADIUS_PX = 10    // invisible click target — stays comfortable at every zoom
 const SHAPE_STROKE_PX = 1.5       // ROI outline; 2x when the ROI is selected
-// Below this many screen pixels per image pixel a grid is denser than the data and reads as
-// moiré, so it is simply not drawn. Must stay reachable: a 1300-wide cube in a ~500px panel is
-// about 0.38 screen pixels per image pixel at 1:1, so this is crossed around 10x zoom.
-const GRID_MIN_PIXEL_SIZE_PX = 4
+// Once an image pixel covers this much screen the grid appears on its own, without being asked
+// for. Switching it on explicitly ignores this and shows it at any zoom.
+const GRID_AUTO_PIXEL_SIZE_PX = 4
+// Closer together than this the lines overlap and the "grid" is just a flat tint, so there is
+// nothing worth drawing even when it has been switched on.
+const GRID_MIN_RENDERABLE_PX = 1.2
 const GRID_STROKE_PX = 0.6
+
+/** Line opacity for a given pixel size on screen: full strength once pixels are comfortably
+ *  apart, fading as the mesh tightens so a dense grid textures the image instead of hiding it. */
+const gridOpacity = (pixelOnScreen: number): number => {
+  const t = Math.min(1, Math.max(0,
+    (pixelOnScreen - GRID_MIN_RENDERABLE_PX) / (GRID_AUTO_PIXEL_SIZE_PX - GRID_MIN_RENDERABLE_PX)))
+  return +(0.1 + 0.2 * t).toFixed(3)
+}
 
 const polygonArea = (vertices: { x: number; y: number }[]): number => {
   if (!vertices.length) return 0
@@ -69,6 +79,7 @@ export default function PrimaryDisplay({
     view,
     setView,
     navigationMode,
+    showPixelGrid,
   } = useApp()
 
   const show = fileLayers.some((l) => l.on)
@@ -790,13 +801,22 @@ export default function PrimaryDisplay({
    *  most a hundred or so are ever visible. Emitted as one path rather than many elements. */
   const gridOverlay = useMemo(() => {
     void imgLoadTick  // re-render trigger: natural size is unknown until the image loads
+    if (!showPixelGrid) return null
     const img = imgRef.current
     const rect = cachedRect.current
     if (!img?.naturalWidth || !img.naturalHeight || !rect?.width || !rect.height) return null
 
     const zoom = Math.max(0.0001, view.zoom)
     const pixel = rect.width / img.naturalWidth
-    if (pixel * zoom < GRID_MIN_PIXEL_SIZE_PX) return null
+    const pixelOnScreen = pixel * zoom
+
+    // Switched on, the grid is shown at any zoom. Left off, zooming in far enough still brings
+    // it out on its own.
+    if (!showPixelGrid && pixelOnScreen < GRID_AUTO_PIXEL_SIZE_PX) return null
+    // The one exception: below about a screen pixel apart the lines overlap, so "drawing the
+    // grid" would just tint the image a flat grey. `gridHint` says so rather than leaving the
+    // button looking broken.
+    if (pixelOnScreen < GRID_MIN_RENDERABLE_PX) return null
 
     // The visible window in content coordinates: undo the pan and zoom the wrapper applies.
     const firstCol = Math.max(0, Math.floor((-view.panX / zoom) / pixel))
@@ -832,10 +852,46 @@ export default function PrimaryDisplay({
           pointerEvents: 'none',
         }}
       >
-        <path d={d} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth={GRID_STROKE_PX / zoom} />
+        <path
+          d={d}
+          fill="none"
+          // Fades as the mesh tightens, so a dense grid reads as a texture over the image
+          // rather than burying it.
+          stroke={`rgba(255,255,255,${gridOpacity(pixelOnScreen)})`}
+          strokeWidth={GRID_STROKE_PX / zoom}
+        />
       </svg>
     )
-  }, [view.panX, view.panY, view.zoom, imgLoadTick])
+  }, [view.panX, view.panY, view.zoom, showPixelGrid, imgLoadTick])
+
+  /** Shown when the grid is switched on but the pixels are too small to outline. */
+  const gridHint = useMemo(() => {
+    void imgLoadTick
+    if (!showPixelGrid) return null
+    const img = imgRef.current
+    const rect = cachedRect.current
+    if (!img?.naturalWidth || !rect?.width) return null
+    if ((rect.width / img.naturalWidth) * Math.max(0.0001, view.zoom) >= GRID_MIN_RENDERABLE_PX) {
+      return null
+    }
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          left: 8,
+          top: 8,
+          padding: '2px 8px',
+          borderRadius: 4,
+          background: 'rgba(0,0,0,0.6)',
+          color: '#eee',
+          fontSize: 12,
+          pointerEvents: 'none',
+        }}
+      >
+        Pixel grid on — zoom in to see it
+      </div>
+    )
+  }, [view.zoom, showPixelGrid, imgLoadTick])
 
   const savedOverlay = useMemo(() => {
     // imgLoadTick is a re-render trigger (not read here): it changes when the image loads so this
@@ -1179,6 +1235,8 @@ export default function PrimaryDisplay({
             {selectionOverlay}
             {polygonOverlay}
           </div>
+
+          {gridHint}
 
 
 
