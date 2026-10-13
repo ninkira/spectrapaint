@@ -4,6 +4,7 @@ import type { RoiExtraction } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import type { Layer } from './types'
+import { MAX_ZOOM, MIN_ZOOM } from './types'
 import type { Spectrum } from '../components/hsi_tools/SpectrumPlot'
 import { useCallback } from 'react'
 
@@ -149,16 +150,16 @@ const [dataset, setDataset] = useState<DatasetMeta>()
   const [view, setViewState] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
 
   const setView = useCallback((next: ViewState) => {
-    const zoom = Math.min(8, Math.max(0.25, next.zoom))
+    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next.zoom))
     setViewState({ zoom, panX: next.panX, panY: next.panY })
   }, [])
 
   const zoomIn = useCallback(() => {
-    setViewState((prev) => ({ ...prev, zoom: Math.min(8, +(prev.zoom * 1.2).toFixed(4)) }))
+    setViewState((prev) => ({ ...prev, zoom: Math.min(MAX_ZOOM, +(prev.zoom * 1.2).toFixed(4)) }))
   }, [])
 
   const zoomOut = useCallback(() => {
-    setViewState((prev) => ({ ...prev, zoom: Math.max(0.25, +(prev.zoom / 1.2).toFixed(4)) }))
+    setViewState((prev) => ({ ...prev, zoom: Math.max(MIN_ZOOM, +(prev.zoom / 1.2).toFixed(4)) }))
   }, [])
 
   const resetView = useCallback(() => {

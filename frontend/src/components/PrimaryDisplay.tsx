@@ -1,6 +1,7 @@
 // PrimaryDisplay.tsx
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type MouseEvent, type WheelEvent } from 'react'
 import { useApp } from '../state/AppContext'
+import { MAX_ZOOM, MIN_ZOOM } from '../state/types'
 import BandPicker from './hsi_tools/BandPicker'
 import type { Spectrum } from './hsi_tools/SpectrumPlot'
 import type { Annotation, RectAnn, EllipseAnn, PolygonAnn, LineAnn } from '../models/annotations'
@@ -19,11 +20,13 @@ type Polygon = { id: string; vertices: ImagePoint[] }
 // view.zoom on screen. Dividing by zoom pins a value to a screen size instead; leaving it alone
 // pins it to the image. Every constant below is in screen pixels and divided at the point of use.
 // The visible dot can be this small because the click target below is separate and generous.
-const PROBE_RADIUS_PX = 2        // minimum visible size of a probe dot when zoomed out
-const PROBE_HIT_RADIUS_PX = 10   // invisible click target — stays comfortable at every zoom
+const PIXEL_MARKER_RADIUS_PX = 2  // minimum visible size of a pixel dot when zoomed out
+const PROBE_HIT_RADIUS_PX = 10    // invisible click target — stays comfortable at every zoom
+const SHAPE_STROKE_PX = 1.5       // ROI outline; 2x when the ROI is selected
 // Below this many screen pixels per image pixel a grid is denser than the data and reads as
-// moiré, so it is simply not drawn.
-const GRID_MIN_PIXEL_SIZE_PX = 7
+// moiré, so it is simply not drawn. Must stay reachable: a 1300-wide cube in a ~500px panel is
+// about 0.38 screen pixels per image pixel at 1:1, so this is crossed around 10x zoom.
+const GRID_MIN_PIXEL_SIZE_PX = 4
 const GRID_STROKE_PX = 0.6
 
 const polygonArea = (vertices: { x: number; y: number }[]): number => {
@@ -711,7 +714,7 @@ export default function PrimaryDisplay({
 
     const oldZoom = view.zoom
     const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
-    const nextZoom = Math.min(8, Math.max(0.25, +(oldZoom * factor).toFixed(4)))
+    const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +(oldZoom * factor).toFixed(4)))
     if (nextZoom === oldZoom) return
 
     const contentX = (mouseX - view.panX) / oldZoom
@@ -728,6 +731,10 @@ export default function PrimaryDisplay({
   let selectionOverlay: JSX.Element | null = null
 
   let polygonOverlay: JSX.Element | null = null
+  // Screen-pinned sizes for the draft overlays, same reasoning as the saved shapes.
+  const overlayZoom = Math.max(0.0001, view.zoom)
+  const overlayStroke = SHAPE_STROKE_PX / overlayZoom
+  const overlayMarkerR = Math.max(PIXEL_MARKER_RADIUS_PX / overlayZoom, imagePixelSize() * 0.5)
 
   const activeBox =
     isBoxMode && dragStart && dragCurrent
@@ -758,7 +765,7 @@ export default function PrimaryDisplay({
             height={activeBox.height}
             fill="rgba(255,0,0,0.08)"
             stroke="red"
-            strokeWidth={2}
+            strokeWidth={overlayStroke}
           />
         ) : (
           <ellipse
@@ -768,7 +775,7 @@ export default function PrimaryDisplay({
             ry={activeBox.height / 2}
             fill="rgba(255,0,0,0.08)"
             stroke="red"
-            strokeWidth={2}
+            strokeWidth={overlayStroke}
           />
         )}
       </svg>
@@ -856,6 +863,15 @@ export default function PrimaryDisplay({
         const zoom = Math.max(0.0001, view.zoom)
         const imagePixel = imagePixelSize()
 
+        // Every pixel marker — a probe, or a vertex of a polygon or line — is sized the same
+        // way: half an image pixel once zoomed in, so it sits inside the pixel it marks, with a
+        // floor in screen pixels so it stays findable zoomed out.
+        const markerR = Math.max(PIXEL_MARKER_RADIUS_PX / zoom, imagePixel * 0.5)
+        const vertexDots = (points: DisplayPoint[], colour: string, id: string) =>
+          points.map((p, i) => (
+            <circle key={`${id}-v${i}`} cx={p.x} cy={p.y} r={markerR} fill={colour} stroke="none" />
+          ))
+
         const drawOrderedAnnotations = annotations
           .filter((a) => dataset && a.datasetId === dataset.id)
           .slice()
@@ -866,7 +882,9 @@ export default function PrimaryDisplay({
           .map(a => {
             const isSelected = a.id === selectedId
             const stroke = isSelected ? SELECTED_STROKE : INACTIVE_STROKE
-            const strokeWidth = isSelected ? 3 : 2
+            // Pinned to the screen: a content-space width would be multiplied by the zoom, and
+            // at the top of the range a 2px outline would render 64px thick.
+            const strokeWidth = (isSelected ? SHAPE_STROKE_PX * 2 : SHAPE_STROKE_PX) / zoom
             const fill = isSelected ? SELECTED_FILL : INACTIVE_FILL
 
             if (a.type === 'rect') {
@@ -899,52 +917,55 @@ export default function PrimaryDisplay({
             }
 
             if (a.type === 'polygon') {
-              const pts = a.geometry.vertices
+              const vertices = a.geometry.vertices
                 .map(toDisplayCoords)
                 .filter((p): p is DisplayPoint => !!p)
-                .map((p) => `${p.x},${p.y}`)
-                .join(' ')
-
-              if (!pts) return null
+              if (!vertices.length) return null
 
               return (
-                <polygon
+                <g
                   key={a.id}
-                  points={pts}
-                  fill={fill}
-                  stroke={stroke}
-                  strokeWidth={strokeWidth}
                   onClick={() => {
                     setSelectedProbePointId(null)
                     setSelectedRoiId(a.id)
                   }}
                   style={{ cursor: 'pointer' }}
-
-                />
+                >
+                  <polygon
+                    points={vertices.map((p) => `${p.x},${p.y}`).join(' ')}
+                    fill={fill}
+                    stroke={stroke}
+                    strokeWidth={strokeWidth}
+                  />
+                  {/* A vertex is a pixel coordinate, so it is marked like one. */}
+                  {vertexDots(vertices, stroke, a.id)}
+                </g>
               )
             }
 
             if (a.type === 'line') {
-              const pts = a.geometry.points
+              const points = a.geometry.points
                 .map(toDisplayCoords)
                 .filter((p): p is DisplayPoint => !!p)
-                .map((p) => `${p.x},${p.y}`)
-                .join(' ')
-              if (!pts) return null
+              if (!points.length) return null
 
               return (
-                <polyline
+                <g
                   key={a.id}
-                  points={pts}
-                  fill="none"
-                  stroke={stroke}
-                  strokeWidth={strokeWidth}
                   onClick={() => {
                     setSelectedProbePointId(null)
                     setSelectedRoiId(a.id)
                   }}
                   style={{ cursor: 'pointer' }}
-                />
+                >
+                  <polyline
+                    points={points.map((p) => `${p.x},${p.y}`).join(' ')}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth={strokeWidth}
+                  />
+                  {vertexDots(points, stroke, a.id)}
+                </g>
               )
             }
 
@@ -955,7 +976,7 @@ export default function PrimaryDisplay({
               // A probe marks one pixel, so it is sized against that pixel: half an image pixel
               // once zoomed in — so the dot sits inside the pixel it marks rather than covering
               // its neighbours — with a floor in screen pixels so it stays findable zoomed out.
-              const probeR = Math.max(PROBE_RADIUS_PX / zoom, imagePixel * 0.5)
+              const probeR = markerR
               // The click target is pinned to the screen instead: a content-space radius would
               // grow with zoom until it swallowed its neighbours.
               const probeHitR = Math.max(PROBE_HIT_RADIUS_PX / zoom, probeR * 2)
@@ -1050,7 +1071,7 @@ export default function PrimaryDisplay({
               points={pts}
               fill="rgba(255,0,0,0.12)"
               stroke="red"
-              strokeWidth={2}
+              strokeWidth={overlayStroke}
             />
           )
         })}
@@ -1063,8 +1084,13 @@ export default function PrimaryDisplay({
               points={draftVertices.map((p) => `${p.x},${p.y}`).join(' ')}
               fill="none"
               stroke="red"
-              strokeWidth={2}
+              strokeWidth={overlayStroke}
             />
+
+            {/* every vertex placed so far, marked like the pixel it is */}
+            {draftVertices.map((p, i) => (
+              <circle key={`draft-v${i}`} cx={p.x} cy={p.y} r={overlayMarkerR} fill="red" stroke="none" />
+            ))}
 
             {/* preview edge to cursor */}
             {draftHover && (
@@ -1074,8 +1100,8 @@ export default function PrimaryDisplay({
                 x2={draftHover.x}
                 y2={draftHover.y}
                 stroke="red"
-                strokeWidth={2}
-                strokeDasharray="4,4"
+                strokeWidth={overlayStroke}
+                strokeDasharray={`${4 / overlayZoom},${4 / overlayZoom}`}
               />
             )}
 
@@ -1084,10 +1110,10 @@ export default function PrimaryDisplay({
               <circle
                 cx={draftVertices[0].x}
                 cy={draftVertices[0].y}
-                r={6}
-                fill="white"
+                r={overlayMarkerR * 2.5}
+                fill="none"
                 stroke="red"
-                strokeWidth={2}
+                strokeWidth={overlayStroke}
               />
             )}
           </>
