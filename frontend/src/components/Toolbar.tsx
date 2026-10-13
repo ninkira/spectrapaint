@@ -57,6 +57,7 @@ export default function Toolbar() {
 
         <button
           aria-label="Navigate"
+          aria-pressed={navigationMode}
           className={navigationMode ? "active" : ""}
           onClick={() => {
             const next = !navigationMode
@@ -89,6 +90,7 @@ export default function Toolbar() {
   
         <button
           aria-label="SelectMultiplePoints"
+          aria-pressed={selectionMode === "multiple"}
           className={selectionMode === "multiple" ? "active" : ""}
           onClick={() => toggleAnnotationMode("multiple")}
         >
@@ -104,6 +106,7 @@ export default function Toolbar() {
 
         <button
           aria-label="SignalProcessing"
+          aria-pressed={showSignalProcessing}
           className={showSignalProcessing ? "active" : ""}
           onClick={toggleSignalProcessing}
         >
