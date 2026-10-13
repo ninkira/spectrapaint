@@ -44,7 +44,7 @@ export default function Toolbar() {
 
   return (
     <header className="toolbar">
-      <div className="title">Projects ▸ The Old Man in Warnemünde</div>
+      <div className="title">Projects ▸ Prints</div>
 
       <div className="tools">
         <button aria-label="Open"><Images size={20} /></button>
