@@ -15,6 +15,17 @@ type ImagePoint = { x: number; y: number } /* Actual HSI Coors */
 
 type Polygon = { id: string; vertices: ImagePoint[] }
 
+// The overlays live *inside* the zoom transform, so a constant written here is multiplied by
+// view.zoom on screen. Dividing by zoom pins a value to a screen size instead; leaving it alone
+// pins it to the image. Every constant below is in screen pixels and divided at the point of use.
+// The visible dot can be this small because the click target below is separate and generous.
+const PROBE_RADIUS_PX = 2        // minimum visible size of a probe dot when zoomed out
+const PROBE_HIT_RADIUS_PX = 10   // invisible click target — stays comfortable at every zoom
+// Below this many screen pixels per image pixel a grid is denser than the data and reads as
+// moiré, so it is simply not drawn.
+const GRID_MIN_PIXEL_SIZE_PX = 7
+const GRID_STROKE_PX = 0.6
+
 const polygonArea = (vertices: { x: number; y: number }[]): number => {
   if (!vertices.length) return 0
   let sum = 0
@@ -402,6 +413,17 @@ export default function PrimaryDisplay({
 
     return { x, y }
   }, [])
+
+  /** Side of one image pixel in overlay (content) coordinates, or 0 before the image loads.
+   *
+   *  Multiply by view.zoom for its size on screen. This is what lets a marker be sized against
+   *  the data it points at rather than against the viewport. */
+  const imagePixelSize = useCallback((): number => {
+    const img = imgRef.current
+    const rect = cachedRect.current
+    if (!img?.naturalWidth || !rect?.width) return 0
+    return rect.width / img.naturalWidth
+  }, [])
   const hasActiveDraft =
     dragStart !== null ||
     draftVertices !== null
@@ -754,6 +776,60 @@ export default function PrimaryDisplay({
   }
 
 
+  /** A one-line-per-image-pixel grid, so individual pixels can be told apart and aimed at.
+   *
+   *  Only drawn once a pixel is big enough on screen to be worth outlining, and only across the
+   *  part of the cube actually in view — a full 1300x2300 cube would be 3,600 lines, of which at
+   *  most a hundred or so are ever visible. Emitted as one path rather than many elements. */
+  const gridOverlay = useMemo(() => {
+    void imgLoadTick  // re-render trigger: natural size is unknown until the image loads
+    const img = imgRef.current
+    const rect = cachedRect.current
+    if (!img?.naturalWidth || !img.naturalHeight || !rect?.width || !rect.height) return null
+
+    const zoom = Math.max(0.0001, view.zoom)
+    const pixel = rect.width / img.naturalWidth
+    if (pixel * zoom < GRID_MIN_PIXEL_SIZE_PX) return null
+
+    // The visible window in content coordinates: undo the pan and zoom the wrapper applies.
+    const firstCol = Math.max(0, Math.floor((-view.panX / zoom) / pixel))
+    const lastCol = Math.min(img.naturalWidth, Math.ceil(((rect.width - view.panX) / zoom) / pixel))
+    const firstRow = Math.max(0, Math.floor((-view.panY / zoom) / pixel))
+    const lastRow = Math.min(img.naturalHeight, Math.ceil(((rect.height - view.panY) / zoom) / pixel))
+    if (lastCol <= firstCol || lastRow <= firstRow) return null
+
+    const top = firstRow * pixel
+    const bottom = lastRow * pixel
+    const left = firstCol * pixel
+    const right = lastCol * pixel
+
+    let d = ''
+    for (let col = firstCol; col <= lastCol; col += 1) {
+      const x = col * pixel
+      d += `M${x},${top}L${x},${bottom}`
+    }
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      const y = row * pixel
+      d += `M${left},${y}L${right},${y}`
+    }
+
+    return (
+      <svg
+        style={{
+          position: 'absolute',
+          inset: 0,
+          left: 0,
+          top: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+        }}
+      >
+        <path d={d} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth={GRID_STROKE_PX / zoom} />
+      </svg>
+    )
+  }, [view.panX, view.panY, view.zoom, imgLoadTick])
+
   const savedOverlay = useMemo(() => {
     // imgLoadTick is a re-render trigger (not read here): it changes when the image loads so this
     // overlay recomputes once the image's natural size is known — otherwise ROIs fetched on a page
@@ -777,6 +853,8 @@ export default function PrimaryDisplay({
         const SELECTED_FILL = 'rgba(208,0,0,0.12)'
         const INACTIVE_FILL = 'rgba(227,181,5,0.12)'
         const selectedId = selectedRoiId ?? selectedProbePointId
+        const zoom = Math.max(0.0001, view.zoom)
+        const imagePixel = imagePixelSize()
 
         const drawOrderedAnnotations = annotations
           .filter((a) => dataset && a.datasetId === dataset.id)
@@ -874,6 +952,14 @@ export default function PrimaryDisplay({
               const p = toDisplayCoords({ x: a.geometry.x, y: a.geometry.y })
               if (!p) return null
 
+              // A probe marks one pixel, so it is sized against that pixel: half an image pixel
+              // once zoomed in — so the dot sits inside the pixel it marks rather than covering
+              // its neighbours — with a floor in screen pixels so it stays findable zoomed out.
+              const probeR = Math.max(PROBE_RADIUS_PX / zoom, imagePixel * 0.5)
+              // The click target is pinned to the screen instead: a content-space radius would
+              // grow with zoom until it swallowed its neighbours.
+              const probeHitR = Math.max(PROBE_HIT_RADIUS_PX / zoom, probeR * 2)
+
               return (
                 <g
                   key={a.id}
@@ -885,14 +971,13 @@ export default function PrimaryDisplay({
                   style={{ cursor: 'pointer' }}
                 >
                   {/* Larger hit area so existing points are easy to click */}
-                  <circle cx={p.x} cy={p.y} r={10} fill="rgba(0,0,0,0.001)" stroke="none" />
+                  <circle cx={p.x} cy={p.y} r={probeHitR} fill="rgba(0,0,0,0.001)" stroke="none" />
                   <circle
                     cx={p.x}
                     cy={p.y}
-                    r={5}
+                    r={isSelected ? probeR * 1.4 : probeR}
                     fill={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
-                    stroke={isSelected ? SELECTED_STROKE : INACTIVE_STROKE}
-                    strokeWidth={strokeWidth}
+                    stroke="none"
                   />
                 </g>
               )
@@ -932,7 +1017,9 @@ export default function PrimaryDisplay({
       })()}
     </svg>
     )
-  }, [annotations, dataset, selectedRoiId, selectedProbePointId, navigationMode, toDisplayCoords, imgLoadTick, setSelectedProbePointId, setSelectedRoiId, setSelectedProbeGroupId])
+  }, [annotations, dataset, selectedRoiId, selectedProbePointId, navigationMode, toDisplayCoords,
+      imagePixelSize, view.zoom, imgLoadTick, setSelectedProbePointId, setSelectedRoiId,
+      setSelectedProbeGroupId])
 
   if (draftVertices && draftVertices.length > 0) {
     polygonOverlay = (
@@ -1061,6 +1148,7 @@ export default function PrimaryDisplay({
                 setImgLoadTick((t) => t + 1)
               }}
             />
+            {gridOverlay}
             {savedOverlay}
             {selectionOverlay}
             {polygonOverlay}
