@@ -36,7 +36,7 @@ const GRID_STROKE_PX = 0.6
 const gridOpacity = (pixelOnScreen: number): number => {
   const t = Math.min(1, Math.max(0,
     (pixelOnScreen - GRID_MIN_RENDERABLE_PX) / (GRID_AUTO_PIXEL_SIZE_PX - GRID_MIN_RENDERABLE_PX)))
-  return +(0.1 + 0.2 * t).toFixed(3)
+  return +(0.18 + 0.22 * t).toFixed(3)
 }
 
 const polygonArea = (vertices: { x: number; y: number }[]): number => {
