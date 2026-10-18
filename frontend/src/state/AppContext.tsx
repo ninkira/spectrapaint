@@ -4,6 +4,7 @@ import type { RoiExtraction } from '../lib/api';
 import type { DatasetMeta } from '../lib/api';
 import type { Annotation } from '../models/annotations'
 import type { Layer } from './types'
+import { MAX_ZOOM, MIN_ZOOM } from './types'
 import type { Spectrum } from '../components/hsi_tools/SpectrumPlot'
 import { useCallback } from 'react'
 
@@ -35,6 +36,10 @@ type Ctx = {
   setNavigationMode: (v: boolean) => void
   showSignalProcessing: boolean
   setShowSignalProcessing: (v: boolean) => void
+  /** Outline every image pixel. Only has a visible effect once zoomed in far enough for a
+   *  pixel to be worth outlining; see GRID_MIN_PIXEL_SIZE_PX in PrimaryDisplay. */
+  showPixelGrid: boolean
+  setShowPixelGrid: (v: boolean) => void
 
   // spetra
   selectedSpectra: Spectrum[];
@@ -145,20 +150,21 @@ const [dataset, setDataset] = useState<DatasetMeta>()
   const [selectionMode, setSelectionMode] = useState<SelectionMode | null>('single')
   const [navigationMode, setNavigationMode] = useState(false)
   const [showSignalProcessing, setShowSignalProcessing] = useState(false)
+  const [showPixelGrid, setShowPixelGrid] = useState(false)
   const [primaryWidth, setPrimaryWidth] = useState(600)
   const [view, setViewState] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
 
   const setView = useCallback((next: ViewState) => {
-    const zoom = Math.min(8, Math.max(0.25, next.zoom))
+    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next.zoom))
     setViewState({ zoom, panX: next.panX, panY: next.panY })
   }, [])
 
   const zoomIn = useCallback(() => {
-    setViewState((prev) => ({ ...prev, zoom: Math.min(8, +(prev.zoom * 1.2).toFixed(4)) }))
+    setViewState((prev) => ({ ...prev, zoom: Math.min(MAX_ZOOM, +(prev.zoom * 1.2).toFixed(4)) }))
   }, [])
 
   const zoomOut = useCallback(() => {
-    setViewState((prev) => ({ ...prev, zoom: Math.max(0.25, +(prev.zoom / 1.2).toFixed(4)) }))
+    setViewState((prev) => ({ ...prev, zoom: Math.max(MIN_ZOOM, +(prev.zoom / 1.2).toFixed(4)) }))
   }, [])
 
   const resetView = useCallback(() => {
@@ -277,6 +283,8 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     setNavigationMode,
     showSignalProcessing,
     setShowSignalProcessing,
+    showPixelGrid,
+    setShowPixelGrid,
 
     // Spectra
     selectedSpectra,
@@ -324,6 +332,7 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     selectionMode,
     navigationMode,
     showSignalProcessing,
+    showPixelGrid,
     selectedSpectra,
     annotations,
     updateAnnotation,

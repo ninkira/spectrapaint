@@ -1,6 +1,8 @@
 :root{
   --bg:#0f1115; --panel:#141a22; --panel2:#10161f; --ink:#e8edf5;
   --muted:#aab3c0; --border:#1f2633; --rail:#0c1119;
+  /* Accent for "this control is switched on", matching the blue used for a selected layer. */
+  --accent:#4a90e2; --accent-soft:rgba(74,144,226,0.20); --accent-press:rgba(74,144,226,0.34);
 }
 *{box-sizing:border-box}
 html,body,#root{height:100%;margin:0;background:var(--bg);color:var(--ink);
@@ -18,15 +20,10 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 
 
 /* Toolbar (top) */
-.toolbar{
-  height:48px; display:flex; align-items:center; gap:12px;
-  background: var(--panel); border-bottom:1px solid var(--border); padding:0 12px;
-}
-.toolbar .title{font-weight:600}
-.toolbar .tools{ display:flex; align-items:center; gap:6px}
-.toolbar .tools .divider{width:1px; height:22px; background:var(--border); margin:0 4px}
+/* .toolbar, .title, .tools and .divider were each declared twice with identical values; the
+   second copy won, so editing this one had no effect. Only the rule unique to this block is
+   kept — the rest live in the block below. */
 .toolbar .tools button{border-radius:8px}
-.toolbar .tools button:hover{background:#1b2431}
 
 .toolbar {
   height: 48px;
@@ -45,14 +42,16 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 .toolbar .tools {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
+/* Dividers get noticeably more room than the gap between buttons, so the groups they separate
+   read as groups rather than as evenly spaced icons. */
 .toolbar .tools .divider {
   width: 1px;
   height: 22px;
   background: var(--border);
-  margin: 0 4px;
+  margin: 0 8px;
 }
 
 /* 🔹 shared style for all top-row buttons */
@@ -73,8 +72,46 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
   color: #fff !important;
 }
 
+/* Toolbar buttons have four distinct states. `.active` had no style at all, so every toggle in
+   the toolbar — navigate, multi-point, shapes, signal processing, pixel grid — looked identical
+   whether it was on or off. The border is reserved at rest so switching on does not shift the
+   icon by a pixel. */
+.toolbar .tools button,
+.toolbar-btn {
+  border: 1px solid transparent;
+  padding: 7px;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+
+.toolbar .tools button:hover,
 .toolbar-btn:hover {
   background: #1b2431;
+}
+
+/* Held down: a brief, obvious response to the click itself. */
+.toolbar .tools button:active,
+.toolbar-btn:active {
+  background: var(--accent-press);
+  border-color: var(--accent);
+}
+
+/* Switched on. Colour needs !important to beat the blanket `color:#fff !important` below. */
+.toolbar .tools button.active,
+.toolbar-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent) !important;
+}
+
+.toolbar .tools button.active:hover,
+.toolbar-btn.active:hover {
+  background: var(--accent-press);
+}
+
+.toolbar .tools button:focus-visible,
+.toolbar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* shape dropdown */
@@ -111,6 +148,16 @@ button{cursor:pointer; background:transparent; border:0; color:inherit}
 
 .shape-tool-item:hover {
   background: #1b2431;
+}
+
+/* Which shape is currently the live mode, so reopening the menu shows where you are. */
+.shape-tool-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.shape-tool-item:active {
+  background: var(--accent-press);
 }
 
 .shape-tool-item svg {

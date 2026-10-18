@@ -11,6 +11,7 @@ import {
   ZoomOut,
   RefreshCw,
   MapPinPlus,
+  Grid3x3,
 } from "lucide-react";
 
 import { useApp } from "../state/AppContext";
@@ -26,6 +27,8 @@ export default function Toolbar() {
     setNavigationMode,
     showSignalProcessing,
     setShowSignalProcessing,
+    showPixelGrid,
+    setShowPixelGrid,
     zoomIn,
     zoomOut,
     resetView,
@@ -44,7 +47,7 @@ export default function Toolbar() {
 
   return (
     <header className="toolbar">
-      <div className="title">Projects ▸ The Old Man in Warnemünde</div>
+      <div className="title">Projects ▸ Prints</div>
 
       <div className="tools">
         <button aria-label="Open"><Images size={20} /></button>
@@ -54,6 +57,7 @@ export default function Toolbar() {
 
         <button
           aria-label="Navigate"
+          aria-pressed={navigationMode}
           className={navigationMode ? "active" : ""}
           onClick={() => {
             const next = !navigationMode
@@ -68,6 +72,16 @@ export default function Toolbar() {
         <button aria-label="Zoom In" onClick={zoomIn}><ZoomIn size={20} /></button>
         <button aria-label="Zoom Out" onClick={zoomOut}><ZoomOut size={20} /></button>
 
+        <button
+          aria-label="Pixel grid"
+          title="Outline each image pixel (visible once zoomed in)"
+          aria-pressed={showPixelGrid}
+          className={showPixelGrid ? "active" : ""}
+          onClick={() => setShowPixelGrid(!showPixelGrid)}
+        >
+          <Grid3x3 size={20} />
+        </button>
+
         <span className="divider" />
 
         {/* ------------------------------- */}
@@ -76,6 +90,7 @@ export default function Toolbar() {
   
         <button
           aria-label="SelectMultiplePoints"
+          aria-pressed={selectionMode === "multiple"}
           className={selectionMode === "multiple" ? "active" : ""}
           onClick={() => toggleAnnotationMode("multiple")}
         >
@@ -91,6 +106,7 @@ export default function Toolbar() {
 
         <button
           aria-label="SignalProcessing"
+          aria-pressed={showSignalProcessing}
           className={showSignalProcessing ? "active" : ""}
           onClick={toggleSignalProcessing}
         >
