@@ -26,10 +26,27 @@ function detectKind(name: string): DataKind | null {
   return null
 }
 
-// A spectral library ships its data as .sli; HSI cubes use .img/.raw/etc.
+// A spectral library ships its data as .sli; HSI cubes use .img/.raw/.dat/etc.
 const LIB_DATA_RE = /\.sli$/i
 const CUBE_DATA_RE = /\.(img|raw|dat|bin|cube|bsq|bil|bip)$/i
 const baseName = (name: string) => name.replace(/\.[^./\\]+$/, '')
+const isDataFile = (name: string) => LIB_DATA_RE.test(name) || CUBE_DATA_RE.test(name)
+
+// A header pairs with its binary either by sharing the stem ("cube.hdr" + "cube.dat") or by
+// carrying the binary's full name ("cube.dat.hdr" + "cube.dat"). Both conventions are in the
+// wild — ENVI itself writes the second one — so accept either.
+function pairsWith(hdrName: string, dataName: string): boolean {
+  const stem = baseName(hdrName).toLowerCase()
+  const data = dataName.toLowerCase()
+  return stem === baseName(data) || stem === data
+}
+
+// Title from the header filename, dropping a data extension the header carries along, so
+// "cube.dat.hdr" is offered as "cube" rather than "cube.dat".
+function titleFor(hdrName: string): string {
+  const stem = baseName(hdrName)
+  return isDataFile(stem) ? baseName(stem) : stem
+}
 
 type ItemKind = 'hsi' | 'visual' | 'library'
 type UploadItem = {
@@ -43,20 +60,19 @@ type UploadItem = {
 }
 
 // Group a flat selection (multi-file or a whole folder) into upload items: each .hdr is paired
-// with its same-stem data file (.sli -> library, .img/.raw -> HSI cube); each image is its own item.
+// with its data file (.sli -> library, .dat/.img/.raw -> HSI cube); each image is its own item.
 function groupFiles(files: File[]): UploadItem[] {
   const items: UploadItem[] = []
-  const dataFiles = files.filter((f) => LIB_DATA_RE.test(f.name) || CUBE_DATA_RE.test(f.name))
+  const dataFiles = files.filter((f) => isDataFile(f.name))
   const used = new Set<File>()
   for (const hdr of files.filter((f) => isHdr(f.name))) {
-    const stem = baseName(hdr.name).toLowerCase()
-    const sibling = dataFiles.find((d) => !used.has(d) && baseName(d.name).toLowerCase() === stem)
+    const sibling = dataFiles.find((d) => !used.has(d) && pairsWith(hdr.name, d.name))
     if (sibling) used.add(sibling)
     const isLib = sibling ? LIB_DATA_RE.test(sibling.name) : false
     items.push({
       key: `hdr:${hdr.name}`,
       kind: isLib ? 'library' : 'hsi',
-      title: baseName(hdr.name),
+      title: titleFor(hdr.name),
       modality: 'HSI',
       hdr,
       data: sibling ?? null,
@@ -397,6 +413,17 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     const grouped = groupFiles(picked)
     setItems(grouped)
 
+    // A cube binary carries no dimensions or wavelengths of its own, so picking one without its
+    // header leaves nothing to upload. Say which file is unpaired instead of dropping it silently.
+    if (grouped.length === 0 && picked.length > 0) {
+      const orphans = picked.filter((f) => isDataFile(f.name)).map((f) => f.name)
+      setError(
+        orphans.length
+          ? `Also select the ENVI .hdr header for ${orphans.join(', ')} — the binary alone cannot be read.`
+          : 'Nothing usable in that selection. Pick an ENVI .hdr with its binary, or a TIFF/PNG/JPEG.',
+      )
+    }
+
     const first = grouped[0]
     setFile(first?.hdr ?? first?.file ?? null)
     setBinary(first?.data ?? null)
@@ -468,7 +495,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     if (!file) return { error: 'Please choose a file to upload.' }
     if (!kind) return { error: 'Unsupported file type. Use an ENVI .hdr, or a TIFF/PNG/JPEG.' }
     if (kind === 'hsi' && !binary) {
-      return { error: 'An ENVI cube needs its binary data file — select the .hdr and its .img/.raw together.' }
+      return { error: 'An ENVI cube needs its binary data file — select the .hdr and its .dat/.img/.raw together.' }
     }
     if (!form.title.trim()) return { error: 'Please enter a title/label for the dataset.' }
     const shared = buildShared()
@@ -491,7 +518,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
       return null
     }
     if (item.kind === 'hsi') {
-      if (!item.hdr || !item.data) throw new Error('needs the .hdr and its .img/.raw binary')
+      if (!item.hdr || !item.data) throw new Error('needs the .hdr and its .dat/.img/.raw binary')
       const meta: UploadMetadata = { ...shared, data_kind: 'hsi', target_modality: 'HSI', title: item.title.trim(), envi_available: true }
       return (await uploadDataset(meta, { file: item.hdr, data: item.data })).id
     }
@@ -506,7 +533,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     for (const it of items) {
       if (!it.title.trim()) { setError('Every item needs a title.'); return }
       if ((it.kind === 'hsi' || it.kind === 'library') && !it.data) {
-        setError(`"${it.title}" is missing its ${it.kind === 'library' ? '.sli' : '.img/.raw'} data file.`)
+        setError(`"${it.title}" is missing its ${it.kind === 'library' ? '.sli' : '.dat/.img/.raw'} data file.`)
         return
       }
     }
@@ -600,8 +627,8 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
           />
           <span style={{ fontSize: '0.75rem', color: '#8aa0bf' }}>
             Pick one dataset, several at once, or a whole folder's files. HSI cube =
-            {' '}<code>.hdr</code> + <code>.img</code>/<code>.raw</code> · spectral library =
-            {' '}<code>.hdr</code> + <code>.sli</code>.
+            {' '}<code>.hdr</code> + <code>.dat</code>/<code>.img</code>/<code>.raw</code> ·
+            {' '}spectral library = <code>.hdr</code> + <code>.sli</code>.
           </span>
         </Field>
 
@@ -678,7 +705,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
                 {binary ? (
                   <code>{binary.name}</code>
                 ) : (
-                  <span style={{ color: '#f87171' }}>missing — also select the .img/.raw file</span>
+                  <span style={{ color: '#f87171' }}>missing — also select the .dat/.img/.raw file</span>
                 )}
                 <br />
                 Dimensions, wavelengths, interleave and the other ENVI header fields are read

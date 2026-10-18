@@ -8,12 +8,14 @@ The Data Manager "＋" button posts here. The endpoint:
   4. invalidates the registry cache so the new dataset appears immediately.
 
 Two shapes of upload:
-  * HSI  — an ENVI header (`.hdr`) plus its binary cube (`data`). Goes under old_man/hsi/.
+  * HSI  — an ENVI header (`.hdr`) plus its binary cube (`data`, typically `.dat`/`.img`/`.raw`).
+    Goes under old_man/hsi/.
   * visual — a single TIFF/PNG/JPEG. The chosen target modality decides the repository folder
     (HSI→hsi, XRF→xrf, RGB→general, other→other) and is stored as the capture modality.
 """
 import json
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -154,9 +156,12 @@ def _make_acquisition(
 
 
 def _save_upload(upload: UploadFile, dest: Path) -> None:
+    """Copy the upload to `dest` in chunks — an HSI cube binary can be several gigabytes, which
+    is more than we want to hold in memory just to hand it straight to the filesystem."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    upload.file.seek(0)
     with open(dest, "wb") as f:
-        f.write(upload.file.read())
+        shutil.copyfileobj(upload.file, f, length=4 * 1024 * 1024)
 
 
 def _meta_or_400(id_: str) -> DatasetMeta:
@@ -175,8 +180,13 @@ def _handle_hsi(
     _project_uuid, object_uuid, project_dir = _resolve_destination(db, meta, now)
     folder = project_dir / "hsi"
     stem = _safe_stem(header.filename or "cube")
-    hdr_path = _unique_path(folder, stem, ".hdr")
     data_ext = Path(data.filename or "").suffix or ".img"
+    # ENVI also writes headers as "<cube>.dat.hdr", which leaves the data extension on the stem.
+    # Drop it so either convention is stored the same way — "<cube>.hdr" + "<cube>.dat" — rather
+    # than as "<cube>.dat.hdr" + "<cube>.dat.dat".
+    if data_ext and stem.lower().endswith(data_ext.lower()):
+        stem = stem[: -len(data_ext)] or "cube"
+    hdr_path = _unique_path(folder, stem, ".hdr")
     data_path = hdr_path.with_suffix(data_ext)  # same stem so open_envi() finds it
 
     _save_upload(header, hdr_path)

@@ -14,6 +14,9 @@ __pycache__/
 backend/app/data/
 *.hdr
 *.img
+*.dat
+*.raw
+*.sli
 
 # IDE / local-only working docs
 .idea/
