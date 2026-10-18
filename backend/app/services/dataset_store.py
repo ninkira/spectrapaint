@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from ..core.data.projects import DEFAULT_PROJECT_SLUG, dataset_owners
+from ..core.data.projects import DEFAULT_PROJECT_SLUG, dataset_objects, dataset_owners
 from ..paths import APP_DATA_DIR, storage
 
 # Legacy aliases. Every pre-existing row belongs to this project and its keys are derived from
@@ -71,11 +71,20 @@ def _build_registry_from_db() -> dict[str, Any]:
     out: dict[str, Any] = {}
     with SessionLocal() as db:
         owners = dataset_owners(db)
+        objects = dataset_objects(db)
 
         def owner(dataset_id: str) -> tuple[str, str]:
             """The project a dataset belongs to, falling back to the legacy one."""
             found = owners.get(dataset_id)
             return (str(found[0]), found[1]) if found else (PROJECT_ID, PROJECT_NAME)
+
+        def belongs_to(dataset_id: str) -> dict[str, Any]:
+            """The object a dataset belongs to — what groups it with its siblings in the UI."""
+            found = objects.get(dataset_id)
+            return {
+                "object_id": str(found[0]) if found else None,
+                "object_title": found[1] if found else None,
+            }
 
         for cube in db.query(HsiCube).all():
             dataset_id = cube.dataset_id or dataset_id_for_data_ref(cube.data_ref)
@@ -85,6 +94,9 @@ def _build_registry_from_db() -> dict[str, Any]:
                 "project_id": project_id,
                 "project_name": project_name,
                 "envi_hdr": str(storage.resolve(cube.data_ref)),
+                "processing_level": cube.processing_level,
+                "derived_from_dataset_id": cube.derived_from_dataset_id,
+                **belongs_to(dataset_id),
             }
 
         for inp in db.query(ExternalInput).all():
@@ -96,6 +108,9 @@ def _build_registry_from_db() -> dict[str, Any]:
                 "name": inp.title or _default_name(inp.data_ref),
                 "project_id": project_id,
                 "project_name": project_name,
+                # A visual derived from a cube already records that link on its own row.
+                "derived_from_dataset_id": inp.linked_dataset_id,
+                **belongs_to(dataset_id),
             }
             suffix = Path(inp.data_ref).suffix.lower()
             key = "tiff" if suffix in {".tif", ".tiff"} else "png" if suffix == ".png" else "jpg"

@@ -76,6 +76,32 @@ def write_envi_cube(
     return hdr_path
 
 
+def write_cube_array(
+    hdr_path: Path, cube: np.ndarray, wavelengths: list[float] | None = None
+) -> Path:
+    """Write an arbitrary (lines, samples, bands) array as an ENVI cube; return the header path.
+
+    `write_envi_cube` generates its own values; this takes them, which is what a preprocessing
+    test needs in order to assert against a reflectance it constructed itself.
+    """
+    bands = cube.shape[2]
+    if wavelengths is None:
+        wavelengths = [400.0 + 50.0 * i for i in range(bands)]
+    hdr_path.parent.mkdir(parents=True, exist_ok=True)
+    envi.save_image(
+        str(hdr_path),
+        cube.astype(np.float32),
+        dtype=np.float32,
+        force=True,
+        interleave="bsq",
+        metadata={
+            "wavelength": [str(w) for w in wavelengths],
+            "wavelength units": "nm",
+        },
+    )
+    return hdr_path
+
+
 def write_spectral_library(
     hdr_path: Path,
     *,

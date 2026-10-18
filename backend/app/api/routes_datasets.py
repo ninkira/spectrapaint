@@ -31,7 +31,7 @@ from ..models.dataset_meta import (
     ExternalInputMeta,
     HsiCubeMeta,
 )
-from ..paths import APP_DATA_DIR
+from ..paths import APP_DATA_DIR, storage
 from ..services.cube_loader import (
     _find_envi_data_file,
     downsample2,
@@ -186,6 +186,13 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
     """
     name = rec.get("name", id_)
     hdr = rec.get("envi_hdr")
+    # Grouping/provenance fields travel with every dataset shape, so they are gathered once.
+    belonging = {
+        "object_id": rec.get("object_id"),
+        "object_title": rec.get("object_title"),
+        "derived_from_dataset_id": rec.get("derived_from_dataset_id"),
+        "processing_level": rec.get("processing_level"),
+    }
 
     if hdr:
         if not os.path.exists(hdr):
@@ -199,6 +206,7 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
             width=md["width"],
             height=md["height"],
             wavelengths_nm=md["wavelengths_nm"],
+            **belonging,
         )
 
     visual_path = rec.get("tiff") or rec.get("png") or rec.get("jpg")
@@ -221,6 +229,7 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
             width=width,
             height=height,
             wavelengths_nm=None,
+            **belonging,
         )
 
     return None
@@ -357,6 +366,48 @@ def visual(id: str, max_w: int | None = Query(default=None, ge=64, le=8192)):
     return Response(content=content, media_type="image/png")
 
 
+def _orphaned_reference_files(db: Session, references: dict[str, str]) -> list[str]:
+    """Which of `references` no remaining cube still lists, as absolute paths (header + binary).
+
+    The dark/white captures behind a flat-field correction are kept on disk but never registered
+    as datasets — they are inputs to the correction, not images to view — so deletion cannot
+    reach them through the registry the way it reaches a cube's own files, and has to go by
+    `HsiCube.reference_refs` instead. Both the radiance cube and the reflectance cube derived
+    from it record the same paths, which is what makes "does anything still need these?"
+    answerable in either deletion order: the files go with whichever of the two is deleted last.
+    """
+    if not references:
+        return []
+    still_claimed = {
+        ref
+        for (refs,) in db.query(HsiCube.reference_refs).all()
+        for ref in (refs or {}).values()
+    }
+    files: list[str] = []
+    for ref in references.values():
+        if ref in still_claimed:
+            continue
+        hdr = str(storage.resolve(ref))
+        files.append(hdr)
+        data_file = _find_envi_data_file(hdr)
+        if data_file:
+            files.append(data_file)
+    return files
+
+
+def _remove_empty_reference_folders(removed: list[str]) -> None:
+    """Drop a references/ folder once its last capture is gone.
+
+    `rmdir` only succeeds on an empty directory, so a folder still holding the references of
+    another cube in the same project is left exactly as it was.
+    """
+    for folder in {Path(p).parent for p in removed if Path(p).parent.name == "references"}:
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
 def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str]:
     """Delete a dataset's DB rows and return the on-disk file paths to remove.
 
@@ -366,7 +417,8 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
          the run history survives rather than blocking the delete;
       2. delete the cube / external input;
       3. delete its DataAcquisition only if nothing else still points at it (old datasets shared
-         one acquisition; uploads each get a dedicated one).
+         one acquisition; uploads each get a dedicated one);
+      4. add in any reference capture this cube was the last to need.
     """
     roi_ids = [
         r[0] for r in db.query(RoiAnnotation.roi_id)
@@ -384,6 +436,7 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
 
     files: list[str] = []
     acquisition_ids: set = set()
+    references: dict[str, str] = {}
 
     hdr = rec.get("envi_hdr")
     if hdr:
@@ -391,6 +444,7 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
         if cube is not None:
             if cube.acquisition_id:
                 acquisition_ids.add(cube.acquisition_id)
+            references = dict(cube.reference_refs or {})
             db.delete(cube)
         files.append(hdr)
         data_file = _find_envi_data_file(hdr)
@@ -406,6 +460,9 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
         if visual_path:
             files.append(visual_path)
     db.flush()
+
+    # After the flush, so the cube on its way out no longer counts as claiming its references.
+    files.extend(_orphaned_reference_files(db, references))
 
     for acq_id in acquisition_ids:
         still_used = (
@@ -433,6 +490,7 @@ def delete_dataset(id: str, db: Session = Depends(get_db)):
             Path(path).unlink(missing_ok=True)
         except OSError:
             pass
+    _remove_empty_reference_folders(files)
     return {"ok": True, "id": id}
 
 

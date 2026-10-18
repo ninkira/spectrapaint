@@ -12,4 +12,10 @@ export type Layer = {
   on: boolean
   path?: string
   type?: 'hsi' | 'tiff' | 'png' | 'jpg'
+  /** The physical object this depicts — what groups it with the rest of that object's data. */
+  objectId?: string | null
+  objectTitle?: string | null
+  /** The dataset this was computed from, e.g. the radiance scan behind a reflectance cube. */
+  derivedFrom?: string | null
+  processingLevel?: string | null
 }

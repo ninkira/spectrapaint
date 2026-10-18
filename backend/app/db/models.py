@@ -140,6 +140,19 @@ class HsiCube(Base):
     title: Mapped[str | None] = mapped_column(String, nullable=True)  # user-facing display label
     checksum: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # "radiance" (as captured) | "reflectance" (flat-field corrected). None for cubes uploaded
+    # before the app tracked this — it cannot be inferred from the file.
+    processing_level: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The cube this one was computed from, as the app's string dataset id (soft reference,
+    # same style as ExternalInput.linked_dataset_id).
+    derived_from_dataset_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The reference captures behind a flat-field correction, as {role: data_ref} — role being
+    # "dark" / "white" / "white_dark". Recorded on the radiance cube they were captured with AND
+    # on every cube derived from it, because the same files are the provenance of both. Those
+    # captures are deliberately not datasets (they are inputs to the correction, not things to
+    # view), so nothing in the registry points at them and deletion has only this column to go
+    # on: the files are removed once no cube still lists them.
+    reference_refs: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
 
     # ENVI header fields
     samples: Mapped[int] = mapped_column(Integer)          # width

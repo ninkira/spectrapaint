@@ -13,6 +13,14 @@ class DatasetMeta(BaseModel):
     height: int
     wavelengths_nm: list[float] | None = None
 
+    # What this dataset belongs with. The object is the physical thing investigated, so it is
+    # what groups a painting's cubes together; `derived_from_dataset_id` nests a computed cube
+    # (a reflectance one, say) under the dataset it was produced from.
+    object_id: str | None = None
+    object_title: str | None = None
+    derived_from_dataset_id: str | None = None
+    processing_level: str | None = None  # "radiance" | "reflectance", when known
+
 
 class HsiCubeMeta(BaseModel):
     """Full ENVI hyperspectral-cube metadata for the dataset-info modal.

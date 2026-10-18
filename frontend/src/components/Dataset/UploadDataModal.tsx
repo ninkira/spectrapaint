@@ -2,13 +2,19 @@ import React, { useEffect, useMemo, useState } from 'react'
 import InfoModal from './DatasetInfoModal'
 import { useApp } from '../../state/AppContext'
 import {
+  createObject,
   getDatasetMetadata,
   listDatasets,
+  listObjects,
+  listProjects,
   uploadDataset,
   uploadSpectralLibrary,
+  type ObjectMeta,
   type DataKind,
   type DatasetMeta,
   type HsiCubeMeta,
+  type ReferenceRole,
+  type ReferenceSet,
   type TargetModality,
   type UploadMetadata,
 } from '../../lib/api'
@@ -48,6 +54,44 @@ function titleFor(hdrName: string): string {
   return isDataFile(stem) ? baseName(stem) : stem
 }
 
+// Specim writes a scan's reference captures beside it as "<ROLE>_<stem>". Longest prefix first,
+// so WHITEDARKREF is never mistaken for WHITEREF.
+const REFERENCE_PREFIXES: Array<[ReferenceRole, RegExp]> = [
+  ['white_dark', /^WHITEDARKREF[_-]/i],
+  ['white', /^WHITEREF[_-]/i],
+  ['dark', /^DARKREF[_-]/i],
+]
+
+const ROLE_LABEL: Record<ReferenceRole, string> = {
+  dark: 'dark',
+  white: 'white',
+  white_dark: 'white-dark',
+}
+
+// Split "DARKREF_087" into its role and the scan it belongs to; null for an ordinary scan name.
+function referenceRole(stem: string): { role: ReferenceRole; base: string } | null {
+  for (const [role, re] of REFERENCE_PREFIXES) {
+    if (re.test(stem)) return { role, base: stem.replace(re, '') }
+  }
+  return null
+}
+
+// What a selected cube *is*. Guessed from the filename, but always the user's to change: the
+// Specim naming is only a convention, and a renamed or differently-exported capture would
+// otherwise be stuck being registered as four unrelated cubes.
+type ItemRole = 'scan' | ReferenceRole | 'reflectance'
+
+const ROLE_OPTIONS: Array<[ItemRole, string]> = [
+  ['scan', 'Radiance (scan)'],
+  ['reflectance', 'Reflectance'],
+  ['dark', 'Dark reference'],
+  ['white', 'White reference'],
+  ['white_dark', 'White-dark reference'],
+]
+
+const isReferenceRole = (role: ItemRole | undefined): role is ReferenceRole =>
+  role === 'dark' || role === 'white' || role === 'white_dark'
+
 type ItemKind = 'hsi' | 'visual' | 'library'
 type UploadItem = {
   key: string
@@ -57,34 +101,85 @@ type UploadItem = {
   hdr?: File
   data?: File | null // hsi binary / library .sli
   file?: File // visual
+  role?: ItemRole // hsi only
+  base?: string // scan name a detected reference carries, lower-cased
+  belongsTo?: string // key of the scan a reference serves
+  convert?: boolean // scan only: flat-field it to reflectance on upload
+}
+
+// A reference is an input to a correction, not a dataset of its own, so it is never registered.
+const isUploadable = (item: UploadItem) =>
+  item.kind !== 'hsi' || item.role === 'scan' || item.role === 'reflectance'
+
+// The references currently assigned to one scan.
+function referencesFor(items: UploadItem[], scanKey: string): ReferenceSet {
+  const set: ReferenceSet = {}
+  for (const item of items) {
+    if (isReferenceRole(item.role) && item.belongsTo === scanKey && item.hdr && item.data) {
+      set[item.role] = { hdr: item.hdr, data: item.data }
+    }
+  }
+  return set
+}
+
+// Re-point every reference at a scan and refresh which scans can be corrected. One item's role
+// decides what the others can do, so this runs over the whole list after any change.
+function normaliseRoles(items: UploadItem[]): UploadItem[] {
+  const scans = items.filter((i) => i.role === 'scan')
+  const pointed = items.map((item) => {
+    if (!isReferenceRole(item.role)) return item
+    const byName = scans.find((s) => s.title.toLowerCase() === item.base)
+    // Falling back to the only scan present is what makes a renamed capture work without
+    // the user having to say which scan each reference belongs to.
+    const target = byName ?? (scans.length === 1 ? scans[0] : undefined)
+    return { ...item, belongsTo: target?.key }
+  })
+  return pointed.map((item, _index, all) => {
+    if (item.role !== 'scan') return item
+    const refs = referencesFor(all, item.key)
+    const possible = Boolean(refs.dark && refs.white)
+    return { ...item, convert: possible ? item.convert ?? true : false }
+  })
 }
 
 // Group a flat selection (multi-file or a whole folder) into upload items: each .hdr is paired
 // with its data file (.sli -> library, .dat/.img/.raw -> HSI cube); each image is its own item.
-function groupFiles(files: File[]): UploadItem[] {
-  const items: UploadItem[] = []
+// Every cube gets a row and a guessed role — references included, so the guess is visible and
+// correctable rather than silently deciding what gets registered.
+function groupFiles(files: File[]): { items: UploadItem[]; unpairedData: string[] } {
   const dataFiles = files.filter((f) => isDataFile(f.name))
   const used = new Set<File>()
-  for (const hdr of files.filter((f) => isHdr(f.name))) {
-    const sibling = dataFiles.find((d) => !used.has(d) && pairsWith(hdr.name, d.name))
-    if (sibling) used.add(sibling)
-    const isLib = sibling ? LIB_DATA_RE.test(sibling.name) : false
-    items.push({
-      key: `hdr:${hdr.name}`,
-      kind: isLib ? 'library' : 'hsi',
-      title: titleFor(hdr.name),
-      modality: 'HSI',
-      hdr,
-      data: sibling ?? null,
+  const items: UploadItem[] = files
+    .filter((f) => isHdr(f.name))
+    .map((hdr) => {
+      const sibling = dataFiles.find((d) => !used.has(d) && pairsWith(hdr.name, d.name))
+      if (sibling) used.add(sibling)
+      const isLib = sibling ? LIB_DATA_RE.test(sibling.name) : false
+      const stem = titleFor(hdr.name)
+      const detected = referenceRole(stem)
+      return {
+        key: `hdr:${hdr.name}`,
+        kind: (isLib ? 'library' : 'hsi') as ItemKind,
+        title: stem,
+        modality: 'HSI' as TargetModality,
+        hdr,
+        data: sibling ?? null,
+        role: isLib ? undefined : detected?.role ?? ('scan' as ItemRole),
+        base: detected?.base.toLowerCase(),
+      }
     })
-  }
   for (const f of files.filter((f) => isVisual(f.name))) {
     items.push({ key: `vis:${f.name}`, kind: 'visual', title: baseName(f.name), modality: 'XRF', file: f })
   }
-  return items
+  // Binaries no header claimed — the only ones worth telling the user about.
+  const unpairedData = dataFiles.filter((d) => !used.has(d)).map((d) => d.name)
+  return { items: normaliseRoles(items), unpairedData }
 }
 
 const KIND_LABEL: Record<ItemKind, string> = { hsi: 'HSI cube', visual: 'Image', library: 'Spectral library' }
+
+// Sentinel for "create one" in the object picker; a real object id is a UUID.
+const NEW_OBJECT = '__new__'
 
 // Read-only ENVI header fields shown in "Source / ENVI details" — populated either from a just-
 // selected .hdr (HSI upload) or from a linked HSI dataset's metadata (a PNG render of an HSI).
@@ -334,6 +429,11 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   const [progress, setProgress] = useState<string | null>(null)
   const [existingDatasets, setExistingDatasets] = useState<DatasetMeta[]>([])
   const [enviInfo, setEnviInfo] = useState<EnviInfo | null>(null)
+  // The object everything in this upload depicts — what the Data Manager groups by.
+  const [projectId, setProjectId] = useState<string | null>(null)
+  const [objects, setObjects] = useState<ObjectMeta[]>([])
+  const [objectChoice, setObjectChoice] = useState('') // '' | object_id | NEW_OBJECT
+  const [newObjectTitle, setNewObjectTitle] = useState('')
 
   const kind: DataKind | null = useMemo(
     () => (file ? detectKind(file.name) : null),
@@ -342,10 +442,27 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   const fileFormat = file ? file.name.split('.').pop()?.toLowerCase() ?? '' : ''
   const linkedDataset = existingDatasets.find((d) => d.id === form.linked_dataset_id)
 
-  const singleItem = items.length === 1 ? items[0] : null
-  const batchMode = items.length > 1
+  // Only some of the selected files become datasets; references feed a correction instead.
+  const registering = useMemo(() => items.filter(isUploadable), [items])
+  const singleItem = registering.length === 1 ? registering[0] : null
+  const batchMode = registering.length > 1
+  const showRoleList = items.length > 1
   const isLibrarySingle = singleItem?.kind === 'library'
-  const hasDatasetItems = items.some((i) => i.kind !== 'library')
+  const hasDatasetItems = registering.some((i) => i.kind !== 'library')
+
+  // Scans that could be corrected, and references nothing claims — both worth surfacing.
+  const scans = useMemo(() => items.filter((i) => i.role === 'scan'), [items])
+  const unassignedRefs = useMemo(
+    () => items.filter((i) => isReferenceRole(i.role) && !i.belongsTo),
+    [items],
+  )
+
+  // A flat-field correction needs at least a dark and a white capture; the white-dark is
+  // optional but changes the result, so its absence is worth saying out loud.
+  const singleRefs =
+    singleItem && singleItem.kind === 'hsi' ? referencesFor(items, singleItem.key) : undefined
+  const canConvert = Boolean(singleRefs?.dark && singleRefs?.white)
+  const willConvert = canConvert && Boolean(singleItem?.convert)
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -354,6 +471,25 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   useEffect(() => {
     if (!isOpen) return
     listDatasets().then(setExistingDatasets).catch(() => setExistingDatasets([]))
+  }, [isOpen])
+
+  // …and the objects this upload could be filed under. Grouping is the point of the picker, so
+  // failing to load them leaves it empty rather than blocking the upload.
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    listProjects()
+      .then(async (projects) => {
+        const first = projects[0]
+        if (!first || cancelled) return
+        setProjectId(first.project_id)
+        const found = await listObjects(first.project_id)
+        if (!cancelled) setObjects(found)
+      })
+      .catch(() => {
+        if (!cancelled) { setProjectId(null); setObjects([]) }
+      })
+    return () => { cancelled = true }
   }, [isOpen])
 
   // Derive the ENVI details to display: from the selected .hdr for an HSI upload, or from a linked
@@ -394,6 +530,16 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     setSubmitting(false)
     setProgress(null)
     setEnviInfo(null)
+    setObjectChoice('')
+    setNewObjectTitle('')
+  }
+
+  // The object this upload is filed under, created first if the user named a new one. Returns
+  // undefined to let the backend fall back to the default object, as it did before grouping.
+  const resolveObjectId = async (): Promise<string | undefined> => {
+    if (objectChoice !== NEW_OBJECT) return objectChoice || undefined
+    if (!projectId) throw new Error('no project is available to create the object in')
+    return (await createObject(projectId, newObjectTitle.trim())).object_id
   }
 
   const close = () => {
@@ -404,30 +550,36 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   const updateItem = (key: string, patch: Partial<UploadItem>) =>
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)))
 
+  // Changing one role re-points every reference and re-decides which scans can be corrected,
+  // so the whole list is normalised rather than just the row that changed.
+  const setRole = (key: string, role: ItemRole) =>
+    setItems((prev) => normaliseRoles(prev.map((it) => (it.key === key ? { ...it, role } : it))))
+
   // One picker for everything — a few files or a whole folder. Files are grouped into items
   // (.hdr paired with its data file, images on their own); the primary item also feeds the
   // single-upload fields (title / ENVI details / modality) below.
   const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? [])
     setError(null)
-    const grouped = groupFiles(picked)
+    const { items: grouped, unpairedData } = groupFiles(picked)
     setItems(grouped)
 
     // A cube binary carries no dimensions or wavelengths of its own, so picking one without its
     // header leaves nothing to upload. Say which file is unpaired instead of dropping it silently.
     if (grouped.length === 0 && picked.length > 0) {
-      const orphans = picked.filter((f) => isDataFile(f.name)).map((f) => f.name)
       setError(
-        orphans.length
-          ? `Also select the ENVI .hdr header for ${orphans.join(', ')} — the binary alone cannot be read.`
+        unpairedData.length
+          ? `Also select the ENVI .hdr header for ${unpairedData.join(', ')} — the binary alone cannot be read.`
           : 'Nothing usable in that selection. Pick an ENVI .hdr with its binary, or a TIFF/PNG/JPEG.',
       )
     }
 
-    const first = grouped[0]
+    // The single rich form below describes whichever item will actually become a dataset.
+    const registering = grouped.filter(isUploadable)
+    const first = registering[0]
     setFile(first?.hdr ?? first?.file ?? null)
     setBinary(first?.data ?? null)
-    if (grouped.length === 1 && first) {
+    if (registering.length === 1 && first) {
       set('title', first.title) // pre-fill the title from the filename (editable)
       if (first.kind === 'hsi') {
         set('target_modality', 'HSI')
@@ -507,6 +659,8 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
       title: form.title.trim(),
       linked_dataset_id: kind === 'visual' ? (form.linked_dataset_id.trim() || undefined) : undefined,
       envi_available: kind === 'hsi' ? true : form.envi_available,
+      convert_to_reflectance: willConvert,
+      processing_level: singleItem?.role === 'reflectance' ? 'reflectance' : undefined,
     }
   }
 
@@ -519,8 +673,26 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     }
     if (item.kind === 'hsi') {
       if (!item.hdr || !item.data) throw new Error('needs the .hdr and its .dat/.img/.raw binary')
-      const meta: UploadMetadata = { ...shared, data_kind: 'hsi', target_modality: 'HSI', title: item.title.trim(), envi_available: true }
-      return (await uploadDataset(meta, { file: item.hdr, data: item.data })).id
+      const refs = referencesFor(items, item.key)
+      const convert = Boolean(item.convert && refs.dark && refs.white)
+      const meta: UploadMetadata = {
+        ...shared,
+        data_kind: 'hsi',
+        target_modality: 'HSI',
+        title: item.title.trim(),
+        envi_available: true,
+        convert_to_reflectance: convert,
+        // A cube the user marked as already corrected is recorded as such rather than
+        // left ambiguous — nothing in an ENVI header says which it is.
+        processing_level: item.role === 'reflectance' ? 'reflectance' : undefined,
+      }
+      return (
+        await uploadDataset(meta, {
+          file: item.hdr,
+          data: item.data,
+          references: convert ? refs : undefined,
+        })
+      ).id
     }
     if (!item.file) throw new Error('has no image file')
     const meta: UploadMetadata = { ...shared, data_kind: 'visual', target_modality: item.modality, title: item.title.trim() }
@@ -528,9 +700,13 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
   }
 
   const runBatch = async () => {
-    const shared = buildShared()
-    if ('error' in shared) { setError(shared.error); return }
-    for (const it of items) {
+    const built = buildShared()
+    if ('error' in built) { setError(built.error); return }
+    if (objectChoice === NEW_OBJECT && !newObjectTitle.trim()) {
+      setError('Name the new object, or pick an existing one.')
+      return
+    }
+    for (const it of registering) {
       if (!it.title.trim()) { setError('Every item needs a title.'); return }
       if ((it.kind === 'hsi' || it.kind === 'library') && !it.data) {
         setError(`"${it.title}" is missing its ${it.kind === 'library' ? '.sli' : '.dat/.img/.raw'} data file.`)
@@ -539,11 +715,20 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     }
     setSubmitting(true)
     setError(null)
+    // Created once, before the loop, so every dataset in the batch lands in the same group.
+    let shared: SharedMeta
+    try {
+      shared = { ...built, object_id: await resolveObjectId() }
+    } catch (err) {
+      setError(`Could not file this under an object: ${err instanceof Error ? err.message : 'failed'}`)
+      setSubmitting(false)
+      return
+    }
     let lastId: string | null = null
     const failures: string[] = []
-    for (let i = 0; i < items.length; i += 1) {
-      const it = items[i]
-      setProgress(`Uploading ${i + 1} of ${items.length}: ${it.title}`)
+    for (let i = 0; i < registering.length; i += 1) {
+      const it = registering[i]
+      setProgress(`Uploading ${i + 1} of ${registering.length}: ${it.title}`)
       try {
         const id = await uploadOneItem(it, shared)
         if (id) lastId = id
@@ -555,7 +740,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
     await refreshDatasets()
     if (lastId) setDatasetId(lastId)
     if (failures.length) {
-      setError(`${failures.length} of ${items.length} item(s) failed:\n${failures.join('\n')}`)
+      setError(`${failures.length} of ${registering.length} item(s) failed:\n${failures.join('\n')}`)
       setSubmitting(false)
     } else {
       close()
@@ -564,7 +749,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (items.length === 0) { setError('Please choose a file to upload.'); return }
+    if (registering.length === 0) { setError('Please choose a file to upload.'); return }
 
     if (batchMode) { await runBatch(); return }
 
@@ -585,10 +770,19 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
 
     const built = buildMetadata()
     if ('error' in built) { setError(built.error); return }
+    if (objectChoice === NEW_OBJECT && !newObjectTitle.trim()) {
+      setError('Name the new object, or pick an existing one.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
-      const created = await uploadDataset(built, { file: file!, data: binary })
+      built.object_id = await resolveObjectId()
+      const created = await uploadDataset(built, {
+        file: file!,
+        data: binary,
+        references: willConvert ? singleRefs : undefined,
+      })
       await refreshDatasets()
       setDatasetId(created.id)
       close()
@@ -628,29 +822,38 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
           <span style={{ fontSize: '0.75rem', color: '#8aa0bf' }}>
             Pick one dataset, several at once, or a whole folder's files. HSI cube =
             {' '}<code>.hdr</code> + <code>.dat</code>/<code>.img</code>/<code>.raw</code> ·
-            {' '}spectral library = <code>.hdr</code> + <code>.sli</code>.
+            {' '}spectral library = <code>.hdr</code> + <code>.sli</code>. Select a scan together
+            with its <code>DARKREF_</code>/<code>WHITEREF_</code> files — all of them at once —
+            and it can be corrected to reflectance.
           </span>
         </Field>
 
-        {/* --- Batch: multiple items detected --- */}
-        {batchMode && (
+        {/* --- What each selected file is --- */}
+        {showRoleList && (
           <div style={{ border: '1px solid #2a3445', borderRadius: 8, padding: '0.6rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             <div style={{ fontSize: '0.8rem', color: '#8aa0bf' }}>
-              {items.length} items detected — titles are pre-filled from filenames. Shared metadata
-              below applies to all cubes/images.
+              {items.length} files paired — set what each one is. A reference is not registered as
+              a dataset; it is used to correct the scan it belongs to.
             </div>
             {items.map((it) => (
-              <div key={it.key} style={{ display: 'grid', gridTemplateColumns: '7rem 1fr 6rem', gap: '0.5rem', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.72rem', color: '#93c5fd', border: '1px solid #3b82f6', borderRadius: 6, padding: '0.1rem 0.4rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  {KIND_LABEL[it.kind]}
-                </span>
+              <div key={it.key} style={{ display: 'grid', gridTemplateColumns: '1fr 10rem 5rem', gap: '0.5rem', alignItems: 'center' }}>
                 <input
                   type="text"
                   value={it.title}
                   onChange={(e) => updateItem(it.key, { title: e.target.value })}
-                  style={{ ...inputStyle, padding: '0.35rem 0.5rem' }}
+                  style={{ ...inputStyle, padding: '0.35rem 0.5rem', opacity: isUploadable(it) ? 1 : 0.55 }}
                 />
-                {it.kind === 'visual' ? (
+                {it.kind === 'hsi' ? (
+                  <select
+                    value={it.role ?? 'scan'}
+                    onChange={(e) => setRole(it.key, e.target.value as ItemRole)}
+                    style={{ ...inputStyle, padding: '0.35rem 0.5rem' }}
+                  >
+                    {ROLE_OPTIONS.map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                ) : it.kind === 'visual' ? (
                   <select
                     value={it.modality}
                     onChange={(e) => updateItem(it.key, { modality: e.target.value as TargetModality })}
@@ -662,12 +865,52 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
                     <option value="other">Other</option>
                   </select>
                 ) : (
-                  <span style={{ fontSize: '0.72rem', color: it.data ? '#8aa0bf' : '#f87171', textAlign: 'center' }}>
-                    {it.data ? (it.kind === 'library' ? '.sli ✓' : 'binary ✓') : 'no data'}
+                  <span style={{ fontSize: '0.72rem', color: '#93c5fd', textAlign: 'center' }}>
+                    {KIND_LABEL[it.kind]}
                   </span>
                 )}
+                <span style={{ fontSize: '0.72rem', color: it.data || it.file ? '#8aa0bf' : '#f87171', textAlign: 'center' }}>
+                  {it.data || it.file ? (it.kind === 'library' ? '.sli ✓' : 'binary ✓') : 'no data'}
+                </span>
               </div>
             ))}
+
+            {/* One toggle per scan that has the references a correction needs. */}
+            {scans.map((scan) => {
+              const refs = referencesFor(items, scan.key)
+              const possible = Boolean(refs.dark && refs.white)
+              const assigned = (['dark', 'white', 'white_dark'] as ReferenceRole[]).filter((r) => refs[r])
+              if (!assigned.length) return null
+              return (
+                <div key={`conv:${scan.key}`} style={{ borderTop: '1px solid #2a3445', paddingTop: '0.5rem' }}>
+                  <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.85rem', opacity: possible ? 1 : 0.6 }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(scan.convert)}
+                      disabled={!possible}
+                      onChange={(e) => updateItem(scan.key, { convert: e.target.checked })}
+                    />
+                    Calculate reflectance for <strong>{scan.title}</strong>
+                  </label>
+                  <div style={{ fontSize: '0.75rem', color: possible ? '#8aa0bf' : '#fbbf24', marginLeft: '1.6rem' }}>
+                    {possible
+                      ? `(scan − dark) / (white − ${refs.white_dark ? 'white-dark' : 'dark'}) using ` +
+                        `${assigned.map((r) => ROLE_LABEL[r]).join(', ')}.` +
+                        (refs.white_dark ? '' : ' No white-dark assigned — the scan’s dark stands in for it.')
+                      : `Also needs a ${refs.dark ? 'white' : 'dark'} reference.`}
+                  </div>
+                </div>
+              )
+            })}
+
+            {unassignedRefs.length > 0 && (
+              <div style={{ fontSize: '0.75rem', color: '#fbbf24', borderTop: '1px solid #2a3445', paddingTop: '0.5rem' }}>
+                {unassignedRefs.map((r) => r.title).join(', ')} —{' '}
+                {scans.length === 0
+                  ? 'no scan selected for these to correct, so they will be ignored.'
+                  : 'could not be matched to a scan by name. Rename, or mark one cube as the scan.'}
+              </div>
+            )}
           </div>
         )}
 
@@ -710,6 +953,13 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
                 <br />
                 Dimensions, wavelengths, interleave and the other ENVI header fields are read
                 automatically.
+              </div>
+            )}
+
+            {willConvert && (
+              <div style={{ fontSize: '0.82rem', color: '#86efac' }}>
+                Both cubes will be registered: the radiance scan, and the reflectance derived
+                from it.
               </div>
             )}
 
@@ -783,6 +1033,31 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
         {/* --- Shared dataset basics (single dataset or a batch containing datasets) --- */}
         {hasDatasetItems && (
           <>
+            <Field label="Object (groups these in the Data Manager)">
+              <select
+                value={objectChoice}
+                onChange={(e) => setObjectChoice(e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">— default object —</option>
+                {objects.map((o) => (
+                  <option key={o.object_id} value={o.object_id}>{o.dc_title}</option>
+                ))}
+                <option value={NEW_OBJECT}>+ New object…</option>
+              </select>
+            </Field>
+            {objectChoice === NEW_OBJECT && (
+              <Field label="New object title" required>
+                <input
+                  type="text"
+                  value={newObjectTitle}
+                  onChange={(e) => setNewObjectTitle(e.target.value)}
+                  placeholder="e.g. Old Man of Warnemünde"
+                  style={inputStyle}
+                />
+              </Field>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
               <Field label="Source tool">
                 <input
@@ -1028,7 +1303,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
             className="btn btn-primary"
             disabled={
               submitting ||
-              items.length === 0 ||
+              registering.length === 0 ||
               (!batchMode && isLibrarySingle && (!form.title.trim() || !binary)) ||
               (!batchMode && !isLibrarySingle && (!file || !form.title.trim() || (kind === 'hsi' && !binary)))
             }
@@ -1036,7 +1311,7 @@ export default function UploadDataModal({ isOpen, onClose }: UploadDataModalProp
             {submitting
               ? 'Uploading…'
               : batchMode
-                ? `Upload ${items.length} items`
+                ? `Upload ${registering.length} items`
                 : isLibrarySingle
                   ? 'Upload library'
                   : 'Upload'}

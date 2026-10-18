@@ -106,6 +106,10 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     path: ds.path,
     type: ds.type,
     on: ds.id === datasetId,
+    objectId: ds.object_id,
+    objectTitle: ds.object_title,
+    derivedFrom: ds.derived_from_dataset_id,
+    processingLevel: ds.processing_level,
   })), [datasets, datasetId])
   const [rgbBands, setRgbBandsState] = useState({ r: 650, g: 550, b: 450 });
   const [rgbImgUrl, setRgbImgUrl] = useState<string>();

@@ -11,45 +11,65 @@ type TreeNode = {
   kind: 'folder' | 'file'
   children?: TreeNode[]
   layer?: Layer
+  count?: number // folder only: how many datasets it holds, at any depth
 }
 
-function buildLayerTree(layers: Layer[]): TreeNode[] {
-  const root: TreeNode = { id: '__root__', name: '', kind: 'folder', children: [] }
-  const folderIndex = new Map<string, TreeNode>()
-  folderIndex.set('__root__', root)
+const UNGROUPED = '__ungrouped__'
 
-  const sorted = [...layers].sort((a, b) => (a.path ?? '').localeCompare(b.path ?? ''))
-  for (const layer of sorted) {
-    const segments = (layer.path ?? layer.name).split('/').filter(Boolean)
-    let currentPath = ''
-    let parentId = '__root__'
-    for (let i = 0; i < segments.length; i += 1) {
-      const segment = segments[i]
-      const isFile = i === segments.length - 1
-      if (isFile) {
-        folderIndex.get(parentId)?.children?.push({
-          id: layer.id,
-          name: segment,
-          kind: 'file',
-          layer,
-        })
-        continue
-      }
-      currentPath = currentPath ? `${currentPath}/${segment}` : segment
-      if (!folderIndex.has(currentPath)) {
-        const folderNode: TreeNode = {
-          id: currentPath,
-          name: segment,
-          kind: 'folder',
-          children: [],
-        }
-        folderIndex.set(currentPath, folderNode)
-        folderIndex.get(parentId)?.children?.push(folderNode)
-      }
-      parentId = currentPath
-    }
+/** Group the datasets by the object they depict, nesting each derived cube under its source.
+ *
+ * Two things make cubes "belong together", and they are different: they can depict the same
+ * physical object (the painting), or one can have been computed from the other (a reflectance
+ * cube from its radiance scan). The first becomes the top level, the second becomes nesting
+ * inside it — so a scan and its correction read as one thing rather than two neighbours.
+ *
+ * Datasets with no object still get a bucket: a dataset that is not shown cannot be selected,
+ * and silently dropping one would be worse than grouping it vaguely.
+ */
+function buildLayerTree(layers: Layer[]): TreeNode[] {
+  const groups = new Map<string, { title: string; layers: Layer[] }>()
+  for (const layer of layers) {
+    const key = layer.objectId ?? UNGROUPED
+    const existing = groups.get(key)
+    if (existing) existing.layers.push(layer)
+    else groups.set(key, { title: layer.objectTitle ?? 'Ungrouped', layers: [layer] })
   }
-  return root.children ?? []
+
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)
+
+  const nodes = [...groups].map(([key, group]) => {
+    const present = new Set(group.layers.map((l) => l.id))
+    const childrenOf = new Map<string, Layer[]>()
+    const roots: Layer[] = []
+    for (const layer of group.layers) {
+      // Only nest under a parent that is actually in this group — otherwise a derived cube
+      // whose source was deleted or filtered away would vanish from the panel entirely.
+      const parent = layer.derivedFrom && present.has(layer.derivedFrom) ? layer.derivedFrom : null
+      if (parent) childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), layer])
+      else roots.push(layer)
+    }
+
+    const fileNode = (layer: Layer): TreeNode => ({
+      id: layer.id,
+      name: layer.name,
+      kind: 'file',
+      layer,
+      children: (childrenOf.get(layer.id) ?? []).sort(byName).map(fileNode),
+    })
+
+    return {
+      id: `object:${key}`,
+      name: group.title,
+      kind: 'folder' as const,
+      count: group.layers.length,
+      children: roots.sort(byName).map(fileNode),
+    }
+  })
+
+  // Anything ungrouped sorts last; it is a fallback, not a real object.
+  return nodes.sort((a, b) =>
+    a.id === `object:${UNGROUPED}` ? 1 : b.id === `object:${UNGROUPED}` ? -1 : byName(a, b),
+  )
 }
 
 export default function DataManager() {
@@ -126,7 +146,14 @@ export default function DataManager() {
           style={{ ...indent, width: '100%', justifyContent: 'flex-start' }}
           onClick={() => setExpanded((prev) => ({ ...prev, [node.id]: !isOpen }))}
         >
-          <span className="lm-name">{isOpen ? '▾' : '▸'} {node.name}</span>
+          <span className="lm-name">
+            {isOpen ? '▾' : '▸'} {node.name}
+            {node.count ? (
+              <span style={{ opacity: 0.6, fontWeight: 400 }}>
+                {' '}— {node.count} cube{node.count === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </span>
         </button>,
       ]
       if (isOpen) {
@@ -140,6 +167,9 @@ export default function DataManager() {
     const layer = node.layer
     if (!layer) return []
 
+    // A cube computed from this one (a reflectance correction) is listed beneath it, indented.
+    const derived = (node.children ?? []).flatMap((child) => renderNode(child, depth + 1))
+
     // Remove mode: show a checkbox so several layers can be picked for removal.
     if (removeMode) {
       return [
@@ -151,6 +181,7 @@ export default function DataManager() {
           />
           <span className="lm-name">{node.name}</span>
         </label>,
+        ...derived,
       ]
     }
 
@@ -166,7 +197,13 @@ export default function DataManager() {
         onClick={() => toggleLayer(layer.id)}
       >
         <span className="lm-name">{node.name}</span>
+        {layer.processingLevel === 'reflectance' && (
+          <span style={{ fontSize: '0.68rem', opacity: 0.7, marginLeft: '0.4rem' }}>
+            reflectance
+          </span>
+        )}
       </button>,
+      ...derived,
     ]
   }
 
