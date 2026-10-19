@@ -238,6 +238,21 @@ const [dataset, setDataset] = useState<DatasetMeta>()
     setDataset(d);
   }, [datasetId, datasets]);
 
+  // Selecting another image starts from a clean slate. Everything cleared here describes a
+  // measurement taken from the cube that was on screen a moment ago: carrying it over left the
+  // previous image's trace in the plot and its annotation in the metadata panel, both labelled
+  // with the new dataset's name. Worse, the two cubes need not share a wavelength grid — a
+  // 60-band trace was being plotted against a 204-band cube's axis.
+  //
+  // The annotations themselves are not touched: they are held per dataset and the effect below
+  // fetches the newly selected one's, so its saved ROIs and probe points come back with it.
+  useEffect(() => {
+    setSelectedSpectra([]);
+    setSelectedRoiId(null);
+    setSelectedProbePointId(null);
+    setSelectedProbeGroupId(null);
+  }, [datasetId]);
+
   // Load saved annotations for the selected dataset from the backend, so they survive a
   // page reload / dataset switch (they are persisted in the DB but were never fetched back).
   useEffect(() => {

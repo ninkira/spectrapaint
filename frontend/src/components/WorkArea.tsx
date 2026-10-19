@@ -101,6 +101,13 @@ export default function WorkArea() {
     return regionSpectra.length ? regionSpectra : globalSelectedSpectra
   }, [selectionMode, globalSelectedSpectra, selectedProbeGroupId, probeSpectraByGroupId, selectedRoiId, roiSpectraById, regionSpectra])
 
+  // The region drawn on the previous image describes that image, not this one. Held locally
+  // here rather than in the context, so it needs clearing here too — the rest of the preview
+  // state is reset alongside the dataset switch itself.
+  useEffect(() => {
+    setRegionSpectra([])
+  }, [dataset?.id])
+
   // An ROI drawn in this session already has its per-pixel spectra in memory. One loaded from
   // the database has none, so fetch the statistics measured when it was saved. Done here rather
   // than in each shape's click handler so there is one trigger instead of five.
