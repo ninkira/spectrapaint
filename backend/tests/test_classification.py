@@ -159,6 +159,137 @@ def test_pipeline_honours_top_k(client, hsi, library):
     assert len(body["results"]["top_matches"]) == 2
 
 
+# --- dead detector edges -------------------------------------------------------------------
+# A VNIR scanner is blind at both ends of its range, where flat-field correction divides noise
+# by noise and produces reflectance well above 1.0. Those values are the largest components of
+# the vector, so they dominate every metric here unless they are dropped first.
+
+SOUND_SIGNAL = [0.30, 0.42, 0.55, 0.61, 0.48]
+# Identical through the middle; only the two dead edges differ, and impossibly so.
+INFLATED_EDGES = [2.05, 0.42, 0.55, 0.61, 1.90]
+
+METHODS = ["sam_matrix", "cosine_matrix", "klpd", "sam_pixel"]
+
+
+def set_valid_bands(client, dataset_id, first, last):
+    response = client.put(
+        f"/api/datasets/{dataset_id}/valid-bands",
+        json={"valid_band_min": first, "valid_band_max": last},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def ranking(body: dict) -> list[tuple[str, float]]:
+    return [(m["pigment_name"], m["score"]) for m in body["results"]["top_matches"]]
+
+
+@pytest.mark.parametrize("method", METHODS)
+def test_dead_edges_change_the_result_when_no_band_range_is_set(client, hsi, library, method):
+    """The control for the test below: without a range the artefacts really do decide the
+    ranking, which is the whole reason for excluding them."""
+    sound = run_pipeline(client, hsi["id"], library["id"], method=method, values=SOUND_SIGNAL)
+    inflated = run_pipeline(client, hsi["id"], library["id"], method=method, values=INFLATED_EDGES)
+    assert ranking(sound.json()) != ranking(inflated.json())
+
+
+@pytest.mark.parametrize("method", METHODS)
+def test_excluded_bands_cannot_influence_a_classification(client, hsi, library, method):
+    """With the dead edges excluded, blowing them up to 2.0 must not move a single score: every
+    metric sees only the bands the detector could actually measure."""
+    set_valid_bands(client, hsi["id"], 1, 3)
+
+    sound = run_pipeline(client, hsi["id"], library["id"], method=method, values=SOUND_SIGNAL)
+    inflated = run_pipeline(client, hsi["id"], library["id"], method=method, values=INFLATED_EDGES)
+    assert ranking(sound.json()) == ranking(inflated.json())
+
+
+def test_an_excluded_band_is_absent_from_the_compared_spectra(client, hsi, library):
+    """Not merely down-weighted — gone. The query, the library rows it is scored against and the
+    wavelength axis they share all stop at the usable range."""
+    set_valid_bands(client, hsi["id"], 1, 3)
+    body = run_pipeline(client, hsi["id"], library["id"], values=SOUND_SIGNAL).json()
+
+    assert body["mean_signal"]["values"] == SOUND_SIGNAL[1:4]
+    assert body["mean_signal"]["wavelengths_nm"] == WAVELENGTHS[1:4]
+    assert body["library"]["bands"] == 3
+    assert body["library"]["wavelengths_nm"] == WAVELENGTHS[1:4]
+    assert all(len(m["values"]) == 3 for m in body["results"]["top_matches"])
+
+
+def test_the_exclusion_is_recorded_as_provenance(client, db, hsi, library):
+    """A run whose input was trimmed must say so, or the result is not reproducible."""
+    set_valid_bands(client, hsi["id"], 1, 3)
+    body = run_pipeline(client, hsi["id"], library["id"], values=SOUND_SIGNAL).json()
+
+    warnings = body["results"]["alignment"]["warnings"]
+    assert any("2 band(s) outside the cube's usable range" in w for w in warnings)
+    assert any("450.0-550.0 nm" in w for w in warnings)
+    # And it reaches the stored ProcessingOperation, not just the response.
+    operation = db.query(ProcessingOperation).one()
+    assert operation.parameters["alignment"]["warnings"] == warnings
+
+
+def test_a_spectrum_of_the_wrong_length_is_flagged_rather_than_mis_trimmed(client, hsi, library):
+    """The range indexes the cube's bands, so it cannot be applied to a spectrum the browser has
+    already resampled. Guessing which bands survived would be worse than saying so.
+
+    Four values for a five-band cube whose range keeps three: neither the full grid nor the
+    trimmed one, so there is no honest way to read it.
+    """
+    set_valid_bands(client, hsi["id"], 1, 3)
+    body = run_pipeline(client, hsi["id"], library["id"], values=[0.3, 0.5, 0.7, 0.6]).json()
+
+    assert any("could not be applied" in w for w in body["results"]["alignment"]["warnings"])
+
+
+def test_an_already_trimmed_spectrum_is_passed_through_untouched(client, hsi, library):
+    """A spectrum carrying exactly as many values as the range keeps has already had the dead
+    bands removed — a re-run of a stored query signal, say. Trimming it again would cut into
+    real data, so it is left alone and not warned about."""
+    set_valid_bands(client, hsi["id"], 1, 3)
+    trimmed = SOUND_SIGNAL[1:4]
+    body = run_pipeline(client, hsi["id"], library["id"], values=trimmed).json()
+
+    assert body["mean_signal"]["values"] == trimmed
+    assert not any("could not be applied" in w for w in body["results"]["alignment"]["warnings"])
+
+
+def test_a_stored_extraction_is_trimmed_before_it_is_compared(client, db, hsi, library):
+    """The saved ROI keeps every band — the plot draws the excluded ones, shaded — so the
+    exclusion has to happen when the stored mean is read back as a query."""
+    set_valid_bands(client, hsi["id"], 1, 3)
+    roi_id = str(uuid.uuid4())
+    client.put(f"/api/datasets/{hsi['id']}/annotations", json={"annotations": [{
+        "id": roi_id, "kind": "region", "type": "rect",
+        "geometry": {"x": 0, "y": 0, "w": 2, "h": 2},
+    }]})
+
+    stored = db.query(SpectralExtraction).one()
+    assert len(stored.mean_spectrum) == 5                      # nothing thrown away on disk
+    assert stored.wavelength_range == "450.0-550.0 nm (usable bands)"
+
+    body = client.post("/api/classification/pipeline/run", json={
+        "dataset_id": hsi["id"],
+        "roi_id": roi_id,
+        "classification_method_id": "klpd",
+        "reference_library_id": library["id"],
+    }).json()
+    assert body["results"]["query_source"] == "extraction"
+    assert body["mean_signal"]["values"] == stored.mean_spectrum[1:4]
+
+
+def test_clearing_the_range_puts_every_band_back_in_play(client, hsi, library):
+    set_valid_bands(client, hsi["id"], 1, 3)
+    cleared = client.put(
+        f"/api/datasets/{hsi['id']}/valid-bands",
+        json={"valid_band_min": None, "valid_band_max": None},
+    )
+    assert cleared.status_code == 200
+    body = run_pipeline(client, hsi["id"], library["id"], values=SOUND_SIGNAL).json()
+    assert body["mean_signal"]["values"] == SOUND_SIGNAL
+
+
 def test_pipeline_records_the_provenance_chain(client, db, hsi, library):
     """Fig. 4 Load stage: ROI -> Spectral Extraction -> Processing Operation -> Derived Dataset."""
     roi_id = str(uuid.uuid4())

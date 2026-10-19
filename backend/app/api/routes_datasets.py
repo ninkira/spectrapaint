@@ -192,6 +192,9 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
         "object_title": rec.get("object_title"),
         "derived_from_dataset_id": rec.get("derived_from_dataset_id"),
         "processing_level": rec.get("processing_level"),
+        # Only cubes have one; a visual's record simply has no such key.
+        "valid_band_min": rec.get("valid_band_min"),
+        "valid_band_max": rec.get("valid_band_max"),
     }
 
     if hdr:
@@ -280,13 +283,16 @@ def list_datasets(project_id: str | None = None, object_id: str | None = None):
 
 
 @router.get("/datasets/{id}/metadata", response_model=HsiCubeMeta)
-def dataset_metadata(id: str):
+def dataset_metadata(id: str, db: Session = Depends(get_db)):
     """Full ENVI-cube metadata for the dataset-info modal (HSI datasets only).
 
     Read straight from the ENVI header so every field is available — the DB HsiCube mirror only
     stores a subset. `cube_id` matches the deterministic id used by the DB sync; `created_at`
     is the header file's modification time. `checksum` is not computed here (it would mean
     hashing the whole cube on every open) and is returned as None.
+
+    The usable band range is the exception: it is not a header field at all but a judgement about
+    the capture, so it comes from the DB row.
     """
     rec = get_dataset_record_or_404(id)
     hdr = rec.get("envi_hdr")
@@ -297,13 +303,71 @@ def dataset_metadata(id: str):
 
     full = read_full_metadata(open_envi(hdr))
     created_at = datetime.fromtimestamp(os.stat(hdr).st_mtime, tz=timezone.utc)
+    cube = db.get(HsiCube, stable_id("cube", id))
     return HsiCubeMeta(
         cube_id=str(stable_id("cube", id)),
         data_ref=_to_relative_project_path(hdr),
         created_at=created_at,
         checksum=None,
+        valid_band_min=cube.valid_band_min if cube else None,
+        valid_band_max=cube.valid_band_max if cube else None,
         **full,
     )
+
+
+class ValidBandRangeUpdate(BaseModel):
+    """A revision of a cube's usable band range. Either bound may be null, meaning unbounded."""
+
+    valid_band_min: int | None = None
+    valid_band_max: int | None = None
+
+
+@router.put("/datasets/{id}/valid-bands")
+def set_valid_bands(id: str, payload: ValidBandRangeUpdate, db: Session = Depends(get_db)):
+    """Revise which bands of a cube are worth comparing.
+
+    Editable because the range cannot always be derived. A cube computed here gets one from the
+    correction's denominator, but a cube imported already-corrected arrives with no reference
+    captures at all, and the only thing that can tell where its detector went blind is a person
+    looking at the spectrum. The same applies when a derived range is simply wrong — a scuffed
+    white reference will put the boundary in the wrong place, and the fix should not require
+    re-uploading several gigabytes.
+
+    Sending both bounds as null clears the range, which puts every band back into play. That is
+    a legitimate thing to want (it is how you check what the exclusion is doing) so it is
+    allowed rather than treated as a malformed request.
+    """
+    get_dataset_record_or_404(id)
+    cube = db.get(HsiCube, stable_id("cube", id))
+    if cube is None:
+        raise HTTPException(
+            status_code=400, detail="A band range applies to HSI cubes only"
+        )
+
+    n_bands = int(cube.number_of_bands or 0)
+    low, high = payload.valid_band_min, payload.valid_band_max
+    for name, value in (("valid_band_min", low), ("valid_band_max", high)):
+        if value is not None and not (0 <= value < n_bands):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{name} must be between 0 and {n_bands - 1} for this cube ({n_bands} bands)",
+            )
+    if low is not None and high is not None and low > high:
+        raise HTTPException(
+            status_code=400,
+            detail="valid_band_min must not be greater than valid_band_max",
+        )
+
+    cube.valid_band_min = low
+    cube.valid_band_max = high
+    db.commit()
+    # The range travels with every DatasetMeta the list endpoint serves, and that list is cached.
+    invalidate_registry_cache()
+    return {
+        "dataset_id": id,
+        "valid_band_min": cube.valid_band_min,
+        "valid_band_max": cube.valid_band_max,
+    }
 
 
 @router.get("/datasets/{id}/db-meta", response_model=DatasetDbMeta)

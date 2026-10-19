@@ -1,6 +1,6 @@
 // frontend/src/components/hsi_tools/PigmentClassification.tsx
 import React, { useEffect, useState } from 'react'
-import SpectrumPlot, { type Spectrum } from './SpectrumPlot'
+import SpectrumPlot, { type BandRange, type Spectrum } from './SpectrumPlot'
 import InfoModal from '../Dataset/DatasetInfoModal'
 import type { RoiExtraction } from '../../lib/api'
 
@@ -15,6 +15,9 @@ interface PigmentClassificationModalProps {
   /** Statistics measured when the ROI was saved. The only source for an ROI restored from the
    *  database, whose per-pixel spectra are not held in the browser. */
   roiExtraction: RoiExtraction | null
+  /** The cube's usable bands, shaded on the plot so it is clear which part of the ROI mean the
+   *  ranking was actually computed from. Read-only here — the range is edited in the work area. */
+  validBands?: BandRange | null
 }
 
 /** How the query and the library were put on a common wavelength grid. Recorded per run. */
@@ -51,6 +54,7 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
   selectedRoiId,
   roiSpectraById,
   roiExtraction,
+  validBands = null,
 }) => {
   const [methods, setMethods] = useState<{ id: string; label: string }[]>([])
   const [libraries, setLibraries] = useState<{ id: string; label: string }[]>([])
@@ -210,6 +214,7 @@ const PigmentClassificationModal: React.FC<PigmentClassificationModalProps> = ({
             wavelengthsNm={roiExtraction?.wavelengths_nm}
             comparisonSpectra={comparisonSpectra}
             title="ROI mean and identified pigment signals"
+            validBands={validBands}
           />
         </div>
 

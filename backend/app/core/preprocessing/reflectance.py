@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import gc
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -33,6 +34,34 @@ from ...services.cube_loader import open_envi
 # values out of sensor noise, so those pixels are zeroed instead.
 MIN_DENOMINATOR = 1e-6
 
+# A band is worth trusting only where the white reference rose well clear of its own dark.
+# MIN_DENOMINATOR above catches the cells that are arithmetically hopeless, but a band can sit
+# just above it and still be useless: at both ends of a VNIR range the lamp's output and the
+# silicon detector's quantum efficiency fall away together, so `white - white_dark` decays to a
+# few counts of read noise rather than to zero. The divide then amplifies that noise into
+# reflectance of 1.5 or 2.0 — values no diffuse surface can produce, and (being the largest
+# numbers in the spectrum) ones that dominate every distance metric used for pigment matching.
+#
+# A tenth of the strongest band's response is the threshold. Measured against a real FX10
+# capture (204 bands, 397-1004 nm, 16k pixels sampled) it puts the range at 406-936 nm, and the
+# two edges behave quite differently either side of it:
+#
+#   * Blue end: this is about right. The first excluded band (403 nm, 9% of peak) already reads
+#     a median reflectance of 1.0 with half the pixels above it, while the first band kept
+#     (409 nm) reads 0.88 and the next one after that is clean.
+#   * NIR end: this is permissive. The response decays far more gently here than it falls away
+#     in the blue, so 10% still admits bands whose median reflectance is 1.20 — unphysical for
+#     a diffuse surface. On that capture the median crosses 1.0 at 896 nm, which is 16.5% of
+#     peak, so a threshold nearer 15-17% would land the NIR edge on the physics.
+#
+# A single fraction cannot sit on both edges at once, and which way to err is a judgement about
+# the measurement rather than something this constant can settle: a tighter default would
+# silently discard real NIR signal, which for pigment identification is where several of the
+# diagnostic features live. So the default stays permissive and visible — the excluded regions
+# are shaded in the plot and the range is editable per cube, which is how a narrower NIR bound
+# gets set for a capture that needs one.
+VALID_BAND_MIN_RESPONSE = 0.1
+
 # Lines written per block. Big enough that the vectorised divide dominates the loop overhead,
 # small enough that a multi-GB cube never has to be resident in full.
 ROWS_PER_BLOCK = 128
@@ -40,6 +69,20 @@ ROWS_PER_BLOCK = 128
 
 class ReferenceMismatch(ValueError):
     """A reference capture does not describe the same detector as the sample cube."""
+
+
+@dataclass(frozen=True)
+class Correction:
+    """What a correction produced, over and above the cube file it wrote.
+
+    `valid_bands` is the inclusive band-index range the result is worth comparing over, or None
+    when the references gave no basis for one. It is handed back rather than written into the
+    ENVI header because the user can revise it afterwards, and a figure the app lets you edit
+    does not belong in a file the app otherwise treats as read-only.
+    """
+
+    metadata: dict[str, Any]
+    valid_bands: tuple[int, int] | None
 
 
 def _release(img: Any) -> None:
@@ -108,6 +151,56 @@ def correction_planes(
     return dark, np.where(np.abs(denominator) < MIN_DENOMINATOR, 0.0, denominator)
 
 
+def _longest_true_run(flags: np.ndarray) -> tuple[int, int] | None:
+    """First and last index (inclusive) of the longest unbroken run of True, or None if there is none."""
+    best: tuple[int, int] | None = None
+    start: int | None = None
+    # The trailing False closes a run that reaches the end of the array.
+    for i, flag in enumerate(flags.tolist() + [False]):
+        if flag:
+            if start is None:
+                start = i
+        elif start is not None:
+            if best is None or (i - start) > (best[1] - best[0] + 1):
+                best = (start, i - 1)
+            start = None
+    return best
+
+
+def band_response(denominator: np.ndarray) -> np.ndarray:
+    """How strongly the detector answered the white reference, per band.
+
+    The median across the detector's columns rather than the mean: a pushbroom sensor has a
+    handful of dead and hot columns, and one saturated column should not be allowed to speak for
+    a band that is otherwise blind.
+    """
+    return np.median(np.abs(denominator), axis=0)
+
+
+def valid_band_range(denominator: np.ndarray) -> tuple[int, int] | None:
+    """The inclusive band-index range of a corrected cube that is worth comparing over.
+
+    Bands whose response falls below VALID_BAND_MIN_RESPONSE of the strongest band's are the
+    detector's dead edges, where the correction divides noise by noise.
+
+    A contiguous range, not a mask of every band that passes: the thing being described is two
+    dead edges, and a range is something the plot can shade and the user can correct by hand,
+    whereas a scattered set of interior band indices would be neither. The *longest* run of
+    passing bands is the one kept, so a single noisy band out in the dead region cannot drag the
+    boundary back to the edge of the detector.
+
+    None when no band passes — an empty, saturated, or mis-captured white reference, where there
+    is no honest range to report and claiming one would be worse than admitting there is none.
+    """
+    if denominator.size == 0:
+        return None
+    response = band_response(denominator)
+    peak = float(response.max())
+    if peak <= 0.0:
+        return None
+    return _longest_true_run(response >= VALID_BAND_MIN_RESPONSE * peak)
+
+
 def to_reflectance(radiance: np.ndarray, dark: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     """(radiance - dark) / denominator, broadcasting the planes over the sample's lines.
 
@@ -126,7 +219,7 @@ def write_reflectance_cube(
     white_dark_hdr: Path | None,
     dest_hdr: Path,
     data_ext: str = ".dat",
-) -> dict[str, Any]:
+) -> Correction:
     """Correct the cube at `radiance_hdr` and write it as a float32 ENVI cube at `dest_hdr`.
 
     Takes paths rather than open images so that every mapping this opens is also released here:
@@ -136,8 +229,9 @@ def write_reflectance_cube(
     expression, but a Specim VNIR scan is several gigabytes, and holding the input, the output
     and a float32 copy of both in memory at once is what would otherwise break here.
 
-    Returns the ENVI metadata written, so the caller can register the new cube without
-    re-reading the header.
+    Returns the ENVI metadata written plus the band range the result is usable over, so the
+    caller can register the new cube without re-reading the header and without re-deriving from
+    reference captures it has already released.
     """
     with ExitStack() as stack:
         radiance = stack.enter_context(open_cube(radiance_hdr))
@@ -158,6 +252,9 @@ def write_reflectance_cube(
             _check_shape("white-dark", white_dark, samples, bands)
 
         dark_plane, denominator = correction_planes(dark, white, white_dark)
+        # Derived here, while the references are still open: once this function returns they are
+        # released, and the denominator is the only thing that knows where the detector went blind.
+        valid_bands = valid_band_range(denominator)
 
         metadata = {str(k): v for k, v in radiance.metadata.items()}
         metadata["data type"] = 4  # ENVI code for 32-bit float
@@ -182,7 +279,7 @@ def write_reflectance_cube(
             del writer
             _release(out)
 
-    return metadata
+    return Correction(metadata=metadata, valid_bands=valid_bands)
 
 
 def dead_fraction(denominator: np.ndarray) -> float:

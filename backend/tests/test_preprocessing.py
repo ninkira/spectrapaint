@@ -14,6 +14,7 @@ from app.core.preprocessing.reflectance import (
     dead_fraction,
     open_cube,
     to_reflectance,
+    valid_band_range,
     write_reflectance_cube,
 )
 from app.db.models import HsiCube
@@ -25,17 +26,25 @@ LINES, SAMPLES, BANDS = 6, 4, 5
 WAVELENGTHS = [400.0, 450.0, 500.0, 550.0, 600.0]
 
 
-def specim_set(folder: Path, stem: str = "087") -> tuple[dict[str, Path], np.ndarray]:
+def specim_set(
+    folder: Path, stem: str = "087", *, lamp_profile: list[float] | None = None
+) -> tuple[dict[str, Path], np.ndarray]:
     """Write a Specim-shaped capture set and return its paths plus the reflectance it encodes.
 
     The sample is built *from* a known reflectance — radiance = truth * lamp + dark — so a test
     can assert the correction recovers that exact array rather than merely "something plausible".
     The lamp climbs steeply across the bands and varies per detector column, which is the
     illumination shape flat-fielding exists to remove.
+
+    `lamp_profile` overrides the per-band lamp output, which is what decides where the detector
+    is blind: a profile that collapses at both ends gives a set with dead band edges.
     """
     rng = np.random.default_rng(7)
     truth = rng.uniform(0.1, 0.9, (LINES, SAMPLES, BANDS)).astype(np.float32)
-    lamp = np.linspace(1.0, 5.0, BANDS)[None, :] * rng.uniform(0.9, 1.1, (SAMPLES, 1))
+    profile = (
+        np.linspace(1.0, 5.0, BANDS) if lamp_profile is None else np.asarray(lamp_profile, float)
+    )
+    lamp = profile[None, :] * rng.uniform(0.9, 1.1, (SAMPLES, 1))
     dark = rng.uniform(90, 110, (SAMPLES, BANDS)).astype(np.float32)
     white_dark = rng.uniform(40, 60, (SAMPLES, BANDS)).astype(np.float32)
 
@@ -163,6 +172,84 @@ def test_dead_cells_are_zeroed_rather_than_infinite():
     assert out[:, 1, 2].tolist() == [0.0, 0.0, 0.0, 0.0]
     assert np.allclose(out[:, 0, 0], 0.5)                 # 2.5 / (5 - 0)
     assert dead_fraction(denominator) == pytest.approx(2 / 6)
+
+
+# --- the usable band range ----------------------------------------------------------------
+
+
+def plane(response: list[float], samples: int = 6) -> np.ndarray:
+    """A (samples, bands) denominator whose every column has the given per-band response."""
+    return np.repeat(np.asarray(response, dtype=np.float32)[None, :], samples, axis=0)
+
+
+def test_dead_band_edges_fall_outside_the_derived_range():
+    """A VNIR detector's shape in miniature: blind at both ends, strong in the middle. Those
+    ends are where the correction divides noise by noise, so they are what the range excludes."""
+    assert valid_band_range(plane([2.0, 5.0, 50.0, 100.0, 90.0, 40.0, 4.0, 1.0])) == (2, 5)
+
+
+def test_a_detector_that_is_good_throughout_keeps_every_band():
+    assert valid_band_range(plane([90.0, 95.0, 100.0, 98.0, 92.0])) == (0, 4)
+
+
+def test_only_one_edge_may_be_dead():
+    """Nothing says the two ends fail together — a range with one open end is still a range."""
+    assert valid_band_range(plane([1.0, 2.0, 60.0, 100.0, 95.0])) == (2, 4)
+
+
+def test_a_noise_spike_in_the_dead_region_does_not_widen_the_range():
+    """One band out in the dead zone can cross the threshold on noise alone. Taking the longest
+    run rather than the outermost passing bands is what stops it dragging the boundary back."""
+    assert valid_band_range(plane([1.0, 80.0, 1.0, 1.0, 50.0, 100.0, 60.0, 2.0])) == (4, 6)
+
+
+def test_a_hot_column_does_not_speak_for_a_blind_band():
+    """The response is a median across the detector's columns, not a mean: a pushbroom sensor
+    has hot and dead columns, and one saturated column must not rescue a band that saw nothing."""
+    denominator = np.full((9, 4), 100.0, dtype=np.float32)
+    denominator[:, 0] = 1.0          # band 0 is blind in every column ...
+    denominator[0, 0] = 10_000.0     # ... except one, which is broken
+    assert valid_band_range(denominator) == (1, 3)
+
+
+def test_a_white_reference_with_no_signal_has_no_range_at_all():
+    """Better to report nothing than to invent a range: an empty or mis-captured white
+    reference gives no basis for one, and saying so is what prompts a user to set it by hand."""
+    assert valid_band_range(np.zeros((4, 6), dtype=np.float32)) is None
+    assert valid_band_range(np.zeros((0, 0), dtype=np.float32)) is None
+
+
+def test_the_correction_reports_the_range_it_derived(tmp_path):
+    paths, _ = specim_set(tmp_path, lamp_profile=[0.02, 2.0, 5.0, 3.0, 0.03])
+    correction = write_reflectance_cube(
+        radiance_hdr=paths["sample"],
+        dark_hdr=paths["dark"],
+        white_hdr=paths["white"],
+        white_dark_hdr=paths["white_dark"],
+        dest_hdr=tmp_path / "edges.hdr",
+    )
+    # The lamp puts out a hundredth of its mid-range output in bands 0 and 4.
+    assert correction.valid_bands == (1, 3)
+    assert correction.metadata["data type"] == 4
+
+
+def test_the_upload_records_the_derived_range_on_the_corrected_cube(client, db, tmp_path):
+    """The range has to be stored at correction time: by the time anything classifies this cube
+    the reference captures are closed, and they are the only thing that knew where it was blind."""
+    paths, _ = specim_set(tmp_path, lamp_profile=[0.02, 2.0, 5.0, 3.0, 0.03])
+    status, meta = upload_with_references(client, paths, title="Dead edges")
+    assert status == 200, meta
+
+    cubes = {cube.processing_level: cube for cube in db.query(HsiCube).all()}
+    assert (cubes["reflectance"].valid_band_min, cubes["reflectance"].valid_band_max) == (1, 3)
+    # The radiance cube was never divided by anything, so no range applies to it.
+    assert cubes["radiance"].valid_band_min is None
+    assert cubes["radiance"].valid_band_max is None
+
+    # And it reaches the client, which needs it to shade the excluded part of the plot.
+    listed = {item["id"]: item for item in client.get("/api/datasets").json()}
+    assert listed[meta["id"]]["valid_band_min"] == 1
+    assert listed[meta["id"]]["valid_band_max"] == 3
 
 
 def test_a_reference_from_another_sensor_is_rejected(tmp_path):

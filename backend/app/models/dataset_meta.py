@@ -21,6 +21,13 @@ class DatasetMeta(BaseModel):
     derived_from_dataset_id: str | None = None
     processing_level: str | None = None  # "radiance" | "reflectance", when known
 
+    # The inclusive band-index range whose spectra are worth comparing; None at either end means
+    # unbounded there. Sent as band indices rather than nanometres because `wavelengths_nm` above
+    # is already the grid they index — two representations of one range would be one too many,
+    # and the UI needs the indices anyway to shade the excluded part of the trace.
+    valid_band_min: int | None = None
+    valid_band_max: int | None = None
+
 
 class HsiCubeMeta(BaseModel):
     """Full ENVI hyperspectral-cube metadata for the dataset-info modal.
@@ -46,6 +53,11 @@ class HsiCubeMeta(BaseModel):
     fwhm: list[float] | None = None
     spectral_range_min: float | None = None
     spectral_range_max: float | None = None
+    # The usable band range (inclusive indices into `wavelengths`). Unlike every other field
+    # here this one is not in the ENVI header — it is derived when the cube is corrected, or set
+    # by hand afterwards — so the info modal reads it from the DB row alongside the header.
+    valid_band_min: int | None = None
+    valid_band_max: int | None = None
 
     # ENVI format
     interleave: str | None = None          # BSQ | BIL | BIP

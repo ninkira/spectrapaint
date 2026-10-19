@@ -96,6 +96,8 @@ def _build_registry_from_db() -> dict[str, Any]:
                 "envi_hdr": str(storage.resolve(cube.data_ref)),
                 "processing_level": cube.processing_level,
                 "derived_from_dataset_id": cube.derived_from_dataset_id,
+                "valid_band_min": cube.valid_band_min,
+                "valid_band_max": cube.valid_band_max,
                 **belongs_to(dataset_id),
             }
 

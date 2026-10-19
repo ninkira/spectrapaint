@@ -224,6 +224,7 @@ def _cube_row(
     processing_level: str | None = None,
     derived_from: str | None = None,
     reference_refs: dict[str, str] | None = None,
+    valid_bands: tuple[int, int] | None = None,
 ) -> HsiCube:
     """An HsiCube row from a read ENVI header, shared by the radiance and reflectance cubes."""
     return HsiCube(
@@ -236,6 +237,8 @@ def _cube_row(
         processing_level=processing_level,
         derived_from_dataset_id=derived_from,
         reference_refs=reference_refs,
+        valid_band_min=valid_bands[0] if valid_bands else None,
+        valid_band_max=valid_bands[1] if valid_bands else None,
         samples=full["samples"],
         lines=full["lines"],
         number_of_bands=full["number_of_bands"],
@@ -365,7 +368,7 @@ def _write_reflectance(
         dest_hdr = _unique_path(
             folder, radiance_hdr.stem + "_reflectance", ".hdr", also=".dat"
         )
-        write_reflectance_cube(
+        correction = write_reflectance_cube(
             radiance_hdr=radiance_hdr,
             dark_hdr=stored["dark"],
             white_hdr=stored["white"],
@@ -401,6 +404,9 @@ def _write_reflectance(
         processing_level="reflectance",
         derived_from=radiance_dataset_id,
         reference_refs=reference_refs,
+        # Only the corrected cube carries a range: it describes where *this* cube's values are
+        # trustworthy, and the radiance cube it came from was never divided by anything.
+        valid_bands=correction.valid_bands,
     ))
     return dataset_id, reference_refs
 

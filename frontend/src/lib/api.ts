@@ -8,6 +8,15 @@ export type DatasetMeta = DatasetBelonging & {
   width: number
   height: number
   wavelengths_nm: number[] | null
+} & ValidBandRange
+
+/** The bands of a cube worth comparing, as inclusive indices into `wavelengths_nm`. Outside it
+ *  the detector was blind and flat-field correction amplified noise into impossible reflectance,
+ *  so classification drops those bands and the plot shades them. Null at either end means
+ *  unbounded there; both null means nothing is excluded. */
+export type ValidBandRange = {
+  valid_band_min?: number | null
+  valid_band_max?: number | null
 }
 
 // Full ENVI hyperspectral-cube metadata (see backend HsiCubeMeta). Optional header fields are
@@ -33,6 +42,30 @@ export type HsiCubeMeta = {
   description: string | null
   file_type: string | null
   header_offset: number | null
+} & ValidBandRange
+
+/** Revise which bands of a cube are worth comparing. Both bounds null clears the range.
+ *
+ *  Editable because it cannot always be derived: a cube the app corrected itself gets a range
+ *  from the correction, but one imported already-corrected arrives with no reference captures,
+ *  so the only thing that can say where its detector went blind is a person reading the plot. */
+export async function setDatasetValidBands(
+  datasetId: string,
+  range: ValidBandRange,
+): Promise<ValidBandRange & { dataset_id: string }> {
+  const r = await fetch(`${base}/datasets/${encodeURIComponent(datasetId)}/valid-bands`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      valid_band_min: range.valid_band_min ?? null,
+      valid_band_max: range.valid_band_max ?? null,
+    }),
+  })
+  if (!r.ok) {
+    const detail = await r.json().catch(() => null)
+    throw new Error(detail?.detail ?? 'Failed to set the usable band range')
+  }
+  return r.json()
 }
 
 // DataAcquisition (capture session) fields — see backend AcquisitionMeta.

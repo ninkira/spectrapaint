@@ -15,6 +15,7 @@ from spectral import io as spyio
 
 from ..core.registry import CLASSIFIERS, UnknownPlugin
 from ..core.spectra.alignment import Alignment, AlignmentError, align, to_nanometres
+from ..core.spectra.bands import band_range, restrict, restrict_wavelengths
 from ..analysis.classification.reference_registry import (
     get_reference_library_or_404,
     list_reference_libraries,
@@ -167,6 +168,52 @@ def _resolve_query_signal(db: Session, req: "PipelineRequest") -> tuple[np.ndarr
         cube.wavelengths if cube else None, cube.wavelength_units if cube else None
     )
     return np.asarray(extraction.mean_spectrum, dtype=float), wavelengths, "extraction"
+
+
+def _drop_dead_bands(
+    cube: HsiCube | None, query: np.ndarray, wavelengths: list[float]
+) -> tuple[np.ndarray, list[float], str | None]:
+    """Remove the cube's excluded bands from the query before anything is compared.
+
+    Applied to the query rather than after alignment, because the library is then interpolated
+    onto whatever grid the query still has — so a dead band is gone from both sides without the
+    exclusion having to be expressed twice. Doing it the other way round would mean mapping cube
+    band indices through the resampling, which is the kind of bookkeeping that silently goes
+    wrong.
+
+    Returns the restricted spectrum, its wavelengths, and a note for the run's provenance.
+
+    The stored range indexes the cube's own bands, so it can only be applied to a spectrum that
+    still has one value per band. A client-supplied `mean_signal` of any other length has already
+    been resampled or trimmed in the browser, and guessing which bands it kept would be worse
+    than leaving it alone — so that case is reported instead of quietly dropping the wrong ones.
+    """
+    if cube is None or (cube.valid_band_min is None and cube.valid_band_max is None):
+        return query, wavelengths, None
+
+    n_bands = int(cube.number_of_bands or 0)
+    rng = band_range(cube.valid_band_min, cube.valid_band_max, n_bands)
+    if rng is None:
+        return query, wavelengths, None
+    if query.shape[0] == rng.n_bands:
+        # Exactly as many values as the range keeps: this spectrum has already had the dead bands
+        # taken out of it (a classification run's own stored query signal, for one), so there is
+        # nothing to drop and nothing to warn about.
+        return query, wavelengths, None
+    if query.shape[0] != n_bands:
+        return query, wavelengths, (
+            f"This cube excludes bands outside {cube.valid_band_min}-{cube.valid_band_max}, but "
+            f"the supplied spectrum has {query.shape[0]} values for a {n_bands}-band cube, so "
+            "the exclusion could not be applied. Dead detector edges may be skewing this result."
+        )
+
+    kept_nm = restrict_wavelengths(wavelengths, rng) if wavelengths else wavelengths
+    span = rng.nm(wavelengths) if wavelengths else None
+    where = f" ({span[0]:.1f}-{span[1]:.1f} nm)" if span else ""
+    return restrict(query, rng), kept_nm, (
+        f"{n_bands - rng.n_bands} band(s) outside the cube's usable range{where} were excluded "
+        "before comparison: the detector has no signal there."
+    )
 
 
 def _strip_spectrum_suffix(name: str) -> str:
@@ -520,6 +567,11 @@ def run_pipeline(req: PipelineRequest, db: Session = Depends(get_db)):
         )
 
     query, query_wavelengths, query_source = _resolve_query_signal(db, req)
+    # Before the library is even loaded: an inflated value at a dead band edge is the largest
+    # component of the vector and would dominate every metric below.
+    query, query_wavelengths, excluded_note = _drop_dead_bands(
+        db.get(HsiCube, stable_id("cube", req.dataset_id)), query, query_wavelengths
+    )
     library_matrix, pigment_names, library_wavelengths = _load_library_matrix(reference_library)
     library_wavelengths = to_nanometres(library_wavelengths)
 
@@ -529,6 +581,8 @@ def run_pipeline(req: PipelineRequest, db: Session = Depends(get_db)):
         )
     except AlignmentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if excluded_note:
+        alignment.warnings.insert(0, excluded_note)
     if alignment.overlap_nm:
         low, high = alignment.overlap_nm
         library_wavelengths = [w for w in query_wavelengths if low <= w <= high]

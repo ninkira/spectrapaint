@@ -153,6 +153,14 @@ class HsiCube(Base):
     # view), so nothing in the registry points at them and deletion has only this column to go
     # on: the files are removed once no cube still lists them.
     reference_refs: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
+    # The inclusive band-index range whose spectra are worth comparing — outside it the detector
+    # was blind and the flat-field divide amplified noise (see core.spectra.bands). Derived from
+    # the correction's denominator when the cube is computed here, and editable afterwards:
+    # a cube imported already-corrected has no reference captures to derive one from, so setting
+    # it by hand is the only way it ever gets one. Both nullable, and independently so — half a
+    # range is still worth honouring.
+    valid_band_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    valid_band_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # ENVI header fields
     samples: Mapped[int] = mapped_column(Integer)          # width
