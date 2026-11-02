@@ -1,0 +1,10 @@
+# Files that are read inside a Linux container must keep LF line endings no matter what the
+# host checkout does. Git on Windows commonly runs with core.autocrlf=true, which rewrites text
+# files to CRLF on checkout — and a CRLF entrypoint fails as
+# "exec /usr/local/bin/spectrapaint-entrypoint: no such file or directory", because the kernel
+# reads the carriage return as part of the interpreter path on the shebang line.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+# Patterns here are matched literally, so a trailing carriage return would stop a line like
+# "backend/launcher.py" from matching and quietly put the desktop launcher back in the image.
+.dockerignore   text eol=lf

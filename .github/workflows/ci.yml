@@ -68,3 +68,51 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+  docker:
+    name: Docker image (build + boot)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: spectrapaint:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot it and check it serves
+        # A build that succeeds proves nothing about a container that starts, so this runs the
+        # real entrypoint against real volumes and waits for the app to answer. The first boot
+        # is also what creates and migrates the SQLite schema, so a broken migration fails here.
+        run: |
+          docker run -d --name spectrapaint-ci -p 8000:8000 \
+            -v spectrapaint-ci-imaging:/data/imaging \
+            -v spectrapaint-ci-state:/data/state \
+            spectrapaint:ci
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/healthz > /dev/null 2>&1; then
+              echo "healthz OK"
+              curl -fsS http://localhost:8000/api/datasets
+              echo
+              # The built frontend has to be in the image, not just the API.
+              curl -fsS http://localhost:8000/ | grep -q '<div id="root"' \
+                && echo "frontend served OK"
+              docker exec spectrapaint-ci test -f /data/state/app.db \
+                && echo "database created on the volume OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the container never answered /healthz"
+          docker logs spectrapaint-ci
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs spectrapaint-ci || true

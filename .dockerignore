@@ -1,0 +1,47 @@
+# Keep the build context small and the image free of host-specific state.
+# Anything listed here is invisible to `docker build`.
+
+.git
+.github
+.claude
+.idea
+
+# Build output of the *other* packaging route (PyInstaller + Inno Setup).
+/dist/
+/build/
+/*Setup.exe
+installer/
+
+# Host virtualenv and caches — the image installs its own dependencies.
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+
+# The desktop launcher opens a pywebview window, which a container has no display for.
+# Excluded from the context so the image cannot accidentally ship a desktop entry point.
+backend/launcher.py
+backend/SpectraPaint.spec
+
+# Built in the image's own node stage; a host build would be the wrong architecture.
+frontend/node_modules/
+frontend/dist/
+
+# User data and database never belong in an image layer — they are mounted at run time.
+backend/app/data/
+app.db
+app.db-*
+*.hdr
+*.img
+*.dat
+*.raw
+*.sli
+
+# Documentation and screenshots are not needed to run the app.
+media/
+*.md
+
+# Local environment overrides.
+.env
+.env.*
+*.log

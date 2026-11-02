@@ -1,0 +1,74 @@
+# SpectraPaint, run as a container.
+#
+#   docker compose up --build        start it (first run builds the image)
+#   open http://localhost:8756       use it
+#   docker compose down              stop it — your data and database are kept
+#
+# One service, one user, one SQLite database: the same local-first shape as the desktop build,
+# just without having to install Python and Node first.
+
+name: spectrapaint
+
+services:
+  spectrapaint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Only matters on a Linux host, and only if you bind-mount host folders below: the
+        # container has to run as a user that may write them. `docker compose build` picks
+        # these up from a .env file beside this one (see .env.example).
+        APP_UID: ${SPECTRAPAINT_UID:-1000}
+        APP_GID: ${SPECTRAPAINT_GID:-1000}
+    image: spectrapaint:local
+    # Named, so `docker logs spectrapaint` and `docker exec -it spectrapaint sh` work.
+    container_name: spectrapaint
+
+    ports:
+      # Bound to 127.0.0.1 on purpose. SpectraPaint has no authentication — it is a personal
+      # research tool, not a server — so it must not be reachable from the network. Change the
+      # left-hand side only if 8756 is taken; publishing it on 0.0.0.0 exposes your data.
+      - "127.0.0.1:${SPECTRAPAINT_PORT:-8756}:8000"
+
+    volumes:
+      # --- The two things that must outlive the container -----------------------------------
+      # Docker-managed named volumes: `docker compose down` keeps them, `down -v` deletes them.
+      # They are the default because the app is upload-driven — datasets exist because they
+      # were added through the Data Manager, which writes both the files and the database rows.
+      # So the app never needs to see a folder of cubes you already have; it needs somewhere of
+      # its own to put the ones you give it.
+      #
+      # imaging: the HSI cubes and images. Multi-gigabyte, which is exactly why they are here
+      #          and not in the image.
+      - imaging:/data/imaging
+      # state:   app.db — every project, object, ROI and annotation. Losing this loses all of
+      #          your annotation work, so keep it out of the container's own filesystem.
+      - state:/data/state
+      #
+      # --- Prefer the files visible on your host? -------------------------------------------
+      # Comment out the two lines above and uncomment these, then put the host paths in .env.
+      # On Linux, make sure both folders are owned by the ids you set as APP_UID/APP_GID.
+      # - ${SPECTRAPAINT_DATA_DIR:-./docker-data/imaging}:/data/imaging
+      # - ${SPECTRAPAINT_STATE_DIR:-./docker-data/state}:/data/state
+
+    # Overrides the image's user without a rebuild — the quick fix when a bind-mounted folder
+    # turns out to be owned by a different id. Leave it alone when using the named volumes.
+    # user: "${SPECTRAPAINT_UID:-1000}:${SPECTRAPAINT_GID:-1000}"
+
+    environment:
+      # The port inside the container. The host-side port is the `ports` mapping above.
+      SPECTRAPAINT_PORT: 8000
+
+    # Reading an ENVI cube memory-maps the file and pulls whole bands into memory. Docker
+    # Desktop's default VM allocation is usually enough; if the container dies while opening a
+    # large cube, raise the VM's memory (Docker Desktop -> Settings -> Resources) rather than
+    # setting a limit here. No memory limit is set on purpose — a limit would make the kernel
+    # kill the server mid-read instead.
+
+    # An upload or a cube read in flight gets time to finish rather than being cut off.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  imaging:
+  state:

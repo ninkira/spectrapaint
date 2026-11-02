@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.example
 
 # Imaging data — user-provided, never committed (large HSI cubes)
 backend/app/data/
@@ -31,6 +32,9 @@ docs/
 
 # Local SQLite database (created next to the app)
 /app.db*
+
+# Host folders for the Docker route's optional bind mounts (cubes + app.db)
+/docker-data/
 
 # OS junk
 .DS_Store
