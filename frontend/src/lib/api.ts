@@ -1,6 +1,6 @@
 import type { Annotation } from '../models/annotations'
 
-export type DatasetMeta = {
+export type DatasetMeta = DatasetBelonging & {
   id: string
   name: string
   type: 'hsi' | 'tiff' | 'png' | 'jpg'
@@ -8,6 +8,15 @@ export type DatasetMeta = {
   width: number
   height: number
   wavelengths_nm: number[] | null
+} & ValidBandRange
+
+/** The bands of a cube worth comparing, as inclusive indices into `wavelengths_nm`. Outside it
+ *  the detector was blind and flat-field correction amplified noise into impossible reflectance,
+ *  so classification drops those bands and the plot shades them. Null at either end means
+ *  unbounded there; both null means nothing is excluded. */
+export type ValidBandRange = {
+  valid_band_min?: number | null
+  valid_band_max?: number | null
 }
 
 // Full ENVI hyperspectral-cube metadata (see backend HsiCubeMeta). Optional header fields are
@@ -33,6 +42,30 @@ export type HsiCubeMeta = {
   description: string | null
   file_type: string | null
   header_offset: number | null
+} & ValidBandRange
+
+/** Revise which bands of a cube are worth comparing. Both bounds null clears the range.
+ *
+ *  Editable because it cannot always be derived: a cube the app corrected itself gets a range
+ *  from the correction, but one imported already-corrected arrives with no reference captures,
+ *  so the only thing that can say where its detector went blind is a person reading the plot. */
+export async function setDatasetValidBands(
+  datasetId: string,
+  range: ValidBandRange,
+): Promise<ValidBandRange & { dataset_id: string }> {
+  const r = await fetch(`${base}/datasets/${encodeURIComponent(datasetId)}/valid-bands`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      valid_band_min: range.valid_band_min ?? null,
+      valid_band_max: range.valid_band_max ?? null,
+    }),
+  })
+  if (!r.ok) {
+    const detail = await r.json().catch(() => null)
+    throw new Error(detail?.detail ?? 'Failed to set the usable band range')
+  }
+  return r.json()
 }
 
 // DataAcquisition (capture session) fields — see backend AcquisitionMeta.
@@ -94,8 +127,22 @@ export async function getDatasetDbMeta(id: string): Promise<DatasetDbMeta> {
 
 // --- Dataset upload ---------------------------------------------------------------------
 
+// Grouping/provenance the Data Manager arranges its tree by.
+export type DatasetBelonging = {
+  object_id?: string | null
+  object_title?: string | null
+  derived_from_dataset_id?: string | null
+  processing_level?: string | null
+}
+
 export type DataKind = 'hsi' | 'visual'
 export type TargetModality = 'HSI' | 'XRF' | 'RGB' | 'other'
+
+// The reference captures a flat-field correction needs. Specim writes them beside the scan as
+// DARKREF_<stem>, WHITEREF_<stem> and WHITEDARKREF_<stem>.
+export type ReferenceRole = 'dark' | 'white' | 'white_dark'
+export type ReferencePair = { hdr: File; data: File }
+export type ReferenceSet = Partial<Record<ReferenceRole, ReferencePair>>
 
 // --- Projects and objects ----------------------------------------------------------------
 // One investigation can cover several physical objects; a dataset belongs to one of each.
@@ -136,6 +183,18 @@ export async function createProject(dc_title: string): Promise<ProjectMeta> {
   return await r.json() as ProjectMeta
 }
 
+// Create the physical object a batch of datasets depicts. `dc_title` is what the Data Manager
+// groups by, so this is how a new painting gets its group.
+export async function createObject(projectId: string, dc_title: string): Promise<ObjectMeta> {
+  const r = await fetch(`${base}/projects/${encodeURIComponent(projectId)}/objects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dc_title }),
+  })
+  if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? 'Failed to create object')
+  return await r.json() as ObjectMeta
+}
+
 export async function listObjects(projectId: string): Promise<ObjectMeta[]> {
   const r = await fetch(`${base}/projects/${projectId}/objects`)
   if (!r.ok) throw new Error('Failed to load objects')
@@ -151,6 +210,11 @@ export type UploadMetadata = {
 
   data_kind: DataKind
   target_modality: TargetModality
+
+  /** Flat-field the cube against the uploaded references and register the corrected result too. */
+  convert_to_reflectance?: boolean
+  /** What this cube already is. Nothing in an ENVI header says, so only the user can. */
+  processing_level?: 'radiance' | 'reflectance'
 
   // display name / label for the dataset
   title?: string
@@ -223,12 +287,18 @@ export async function uploadSpectralLibrary(
 // case `data` must carry the binary cube. Returns the newly registered dataset.
 export async function uploadDataset(
   meta: UploadMetadata,
-  files: { file: File; data?: File | null },
+  files: { file: File; data?: File | null; references?: ReferenceSet },
 ): Promise<DatasetMeta> {
   const form = new FormData()
   form.append('metadata', JSON.stringify(meta))
   form.append('file', files.file)
   if (files.data) form.append('data', files.data)
+  // Each reference goes up as its own .hdr + binary, under the field names the endpoint expects.
+  for (const [role, pair] of Object.entries(files.references ?? {})) {
+    if (!pair) continue
+    form.append(role, pair.hdr)
+    form.append(`${role}_data`, pair.data)
+  }
 
   const r = await fetch(`${base}/datasets/upload`, { method: 'POST', body: form })
   if (!r.ok) {

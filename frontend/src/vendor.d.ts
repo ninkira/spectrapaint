@@ -5,6 +5,9 @@ declare module 'plotly.js' {
   export type Data = any
   export type Layout = any
   export type Config = any
+  // Sub-objects of Layout: `shapes` (the shaded excluded-band regions) and `annotations`.
+  export type Shape = any
+  export type Annotations = any
 }
 
 declare module 'react-plotly.js' {

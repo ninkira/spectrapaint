@@ -31,7 +31,7 @@ from ..models.dataset_meta import (
     ExternalInputMeta,
     HsiCubeMeta,
 )
-from ..paths import APP_DATA_DIR
+from ..paths import APP_DATA_DIR, storage
 from ..services.cube_loader import (
     _find_envi_data_file,
     downsample2,
@@ -186,6 +186,16 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
     """
     name = rec.get("name", id_)
     hdr = rec.get("envi_hdr")
+    # Grouping/provenance fields travel with every dataset shape, so they are gathered once.
+    belonging = {
+        "object_id": rec.get("object_id"),
+        "object_title": rec.get("object_title"),
+        "derived_from_dataset_id": rec.get("derived_from_dataset_id"),
+        "processing_level": rec.get("processing_level"),
+        # Only cubes have one; a visual's record simply has no such key.
+        "valid_band_min": rec.get("valid_band_min"),
+        "valid_band_max": rec.get("valid_band_max"),
+    }
 
     if hdr:
         if not os.path.exists(hdr):
@@ -199,6 +209,7 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
             width=md["width"],
             height=md["height"],
             wavelengths_nm=md["wavelengths_nm"],
+            **belonging,
         )
 
     visual_path = rec.get("tiff") or rec.get("png") or rec.get("jpg")
@@ -221,6 +232,7 @@ def build_dataset_meta(id_: str, rec: dict) -> DatasetMeta | None:
             width=width,
             height=height,
             wavelengths_nm=None,
+            **belonging,
         )
 
     return None
@@ -271,13 +283,16 @@ def list_datasets(project_id: str | None = None, object_id: str | None = None):
 
 
 @router.get("/datasets/{id}/metadata", response_model=HsiCubeMeta)
-def dataset_metadata(id: str):
+def dataset_metadata(id: str, db: Session = Depends(get_db)):
     """Full ENVI-cube metadata for the dataset-info modal (HSI datasets only).
 
     Read straight from the ENVI header so every field is available — the DB HsiCube mirror only
     stores a subset. `cube_id` matches the deterministic id used by the DB sync; `created_at`
     is the header file's modification time. `checksum` is not computed here (it would mean
     hashing the whole cube on every open) and is returned as None.
+
+    The usable band range is the exception: it is not a header field at all but a judgement about
+    the capture, so it comes from the DB row.
     """
     rec = get_dataset_record_or_404(id)
     hdr = rec.get("envi_hdr")
@@ -288,13 +303,71 @@ def dataset_metadata(id: str):
 
     full = read_full_metadata(open_envi(hdr))
     created_at = datetime.fromtimestamp(os.stat(hdr).st_mtime, tz=timezone.utc)
+    cube = db.get(HsiCube, stable_id("cube", id))
     return HsiCubeMeta(
         cube_id=str(stable_id("cube", id)),
         data_ref=_to_relative_project_path(hdr),
         created_at=created_at,
         checksum=None,
+        valid_band_min=cube.valid_band_min if cube else None,
+        valid_band_max=cube.valid_band_max if cube else None,
         **full,
     )
+
+
+class ValidBandRangeUpdate(BaseModel):
+    """A revision of a cube's usable band range. Either bound may be null, meaning unbounded."""
+
+    valid_band_min: int | None = None
+    valid_band_max: int | None = None
+
+
+@router.put("/datasets/{id}/valid-bands")
+def set_valid_bands(id: str, payload: ValidBandRangeUpdate, db: Session = Depends(get_db)):
+    """Revise which bands of a cube are worth comparing.
+
+    Editable because the range cannot always be derived. A cube computed here gets one from the
+    correction's denominator, but a cube imported already-corrected arrives with no reference
+    captures at all, and the only thing that can tell where its detector went blind is a person
+    looking at the spectrum. The same applies when a derived range is simply wrong — a scuffed
+    white reference will put the boundary in the wrong place, and the fix should not require
+    re-uploading several gigabytes.
+
+    Sending both bounds as null clears the range, which puts every band back into play. That is
+    a legitimate thing to want (it is how you check what the exclusion is doing) so it is
+    allowed rather than treated as a malformed request.
+    """
+    get_dataset_record_or_404(id)
+    cube = db.get(HsiCube, stable_id("cube", id))
+    if cube is None:
+        raise HTTPException(
+            status_code=400, detail="A band range applies to HSI cubes only"
+        )
+
+    n_bands = int(cube.number_of_bands or 0)
+    low, high = payload.valid_band_min, payload.valid_band_max
+    for name, value in (("valid_band_min", low), ("valid_band_max", high)):
+        if value is not None and not (0 <= value < n_bands):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{name} must be between 0 and {n_bands - 1} for this cube ({n_bands} bands)",
+            )
+    if low is not None and high is not None and low > high:
+        raise HTTPException(
+            status_code=400,
+            detail="valid_band_min must not be greater than valid_band_max",
+        )
+
+    cube.valid_band_min = low
+    cube.valid_band_max = high
+    db.commit()
+    # The range travels with every DatasetMeta the list endpoint serves, and that list is cached.
+    invalidate_registry_cache()
+    return {
+        "dataset_id": id,
+        "valid_band_min": cube.valid_band_min,
+        "valid_band_max": cube.valid_band_max,
+    }
 
 
 @router.get("/datasets/{id}/db-meta", response_model=DatasetDbMeta)
@@ -357,6 +430,48 @@ def visual(id: str, max_w: int | None = Query(default=None, ge=64, le=8192)):
     return Response(content=content, media_type="image/png")
 
 
+def _orphaned_reference_files(db: Session, references: dict[str, str]) -> list[str]:
+    """Which of `references` no remaining cube still lists, as absolute paths (header + binary).
+
+    The dark/white captures behind a flat-field correction are kept on disk but never registered
+    as datasets — they are inputs to the correction, not images to view — so deletion cannot
+    reach them through the registry the way it reaches a cube's own files, and has to go by
+    `HsiCube.reference_refs` instead. Both the radiance cube and the reflectance cube derived
+    from it record the same paths, which is what makes "does anything still need these?"
+    answerable in either deletion order: the files go with whichever of the two is deleted last.
+    """
+    if not references:
+        return []
+    still_claimed = {
+        ref
+        for (refs,) in db.query(HsiCube.reference_refs).all()
+        for ref in (refs or {}).values()
+    }
+    files: list[str] = []
+    for ref in references.values():
+        if ref in still_claimed:
+            continue
+        hdr = str(storage.resolve(ref))
+        files.append(hdr)
+        data_file = _find_envi_data_file(hdr)
+        if data_file:
+            files.append(data_file)
+    return files
+
+
+def _remove_empty_reference_folders(removed: list[str]) -> None:
+    """Drop a references/ folder once its last capture is gone.
+
+    `rmdir` only succeeds on an empty directory, so a folder still holding the references of
+    another cube in the same project is left exactly as it was.
+    """
+    for folder in {Path(p).parent for p in removed if Path(p).parent.name == "references"}:
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
 def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str]:
     """Delete a dataset's DB rows and return the on-disk file paths to remove.
 
@@ -366,7 +481,8 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
          the run history survives rather than blocking the delete;
       2. delete the cube / external input;
       3. delete its DataAcquisition only if nothing else still points at it (old datasets shared
-         one acquisition; uploads each get a dedicated one).
+         one acquisition; uploads each get a dedicated one);
+      4. add in any reference capture this cube was the last to need.
     """
     roi_ids = [
         r[0] for r in db.query(RoiAnnotation.roi_id)
@@ -384,6 +500,7 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
 
     files: list[str] = []
     acquisition_ids: set = set()
+    references: dict[str, str] = {}
 
     hdr = rec.get("envi_hdr")
     if hdr:
@@ -391,6 +508,7 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
         if cube is not None:
             if cube.acquisition_id:
                 acquisition_ids.add(cube.acquisition_id)
+            references = dict(cube.reference_refs or {})
             db.delete(cube)
         files.append(hdr)
         data_file = _find_envi_data_file(hdr)
@@ -406,6 +524,9 @@ def _delete_dataset_records(db: Session, dataset_id: str, rec: dict) -> list[str
         if visual_path:
             files.append(visual_path)
     db.flush()
+
+    # After the flush, so the cube on its way out no longer counts as claiming its references.
+    files.extend(_orphaned_reference_files(db, references))
 
     for acq_id in acquisition_ids:
         still_used = (
@@ -433,6 +554,7 @@ def delete_dataset(id: str, db: Session = Depends(get_db)):
             Path(path).unlink(missing_ok=True)
         except OSError:
             pass
+    _remove_empty_reference_folders(files)
     return {"ok": True, "id": id}
 
 

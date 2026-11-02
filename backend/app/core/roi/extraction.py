@@ -16,6 +16,7 @@ import uuid
 import numpy as np
 from sqlalchemy.orm import Session
 
+from ...core.spectra.bands import band_range, restrict_wavelengths
 from ...db.ids import stable_id
 from ...db.models import HsiCube, RoiAnnotation, SpectralExtraction
 from ...paths import storage
@@ -30,10 +31,24 @@ def extraction_id_for(roi_id: uuid.UUID | str) -> uuid.UUID:
     return stable_id("extraction", str(roi_id))
 
 
-def _wavelength_range(wavelengths: list[float] | None) -> str | None:
+def _wavelength_range(cube: HsiCube) -> str | None:
+    """The span this extraction's spectra are actually meaningful over.
+
+    Narrowed to the cube's usable bands when it has them. The stored arrays themselves stay on
+    the cube's full band grid (see `ensure_extraction`), so this string is what tells a reader
+    that their first and last stretch is detector noise rather than measurement — and it is what
+    the classification panel shows beside the band count.
+    """
+    wavelengths = cube.wavelengths
     if not wavelengths:
         return None
-    return f"{min(wavelengths):.1f}-{max(wavelengths):.1f} nm"
+    rng = band_range(cube.valid_band_min, cube.valid_band_max, len(wavelengths))
+    kept = restrict_wavelengths(wavelengths, rng)
+    if not kept:
+        return None
+    # min/max rather than the end values: an ENVI header is not obliged to list bands in order.
+    span = f"{min(kept):.1f}-{max(kept):.1f} nm"
+    return span if rng is None else f"{span} (usable bands)"
 
 
 def ensure_extraction(
@@ -76,6 +91,12 @@ def ensure_extraction(
         logger.exception("Failed to extract spectra for ROI %s", roi.roi_id)
         return None
 
+    # The statistics stay on the cube's full band grid, dead edges included, and the usable range
+    # is recorded alongside them rather than cut out of them. Two reasons, both load-bearing:
+    # the plot pairs these arrays with the cube's own wavelength list, so a shortened array would
+    # silently plot every value at the wrong wavelength; and a classification run reads this mean
+    # back as its query, where the exclusion is applied by band index — which only works while
+    # there is still one value per band. Excluding here would strand the data and break both.
     stats = region_stats(values)
     return db.merge(SpectralExtraction(
         extraction_id=extraction_id,
@@ -87,5 +108,5 @@ def ensure_extraction(
         min_spectrum=stats["min"],
         max_spectrum=stats["max"],
         pixel_count=stats["n_pixels"],
-        wavelength_range=_wavelength_range(cube.wavelengths),
+        wavelength_range=_wavelength_range(cube),
     ))

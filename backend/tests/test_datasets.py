@@ -1,10 +1,13 @@
 """Dataset ingestion, listing, metadata and rendering endpoints."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy import text
 
 from app.db.ids import stable_id
 from app.db.models import DataAcquisition, ExternalInput, HsiCube, Project
+from app.paths import storage
 from app.services.dataset_store import invalidate_registry_cache
 
 from conftest import is_png, open_image, upload_hsi, upload_visual, write_envi_cube, write_png
@@ -35,6 +38,45 @@ def test_upload_hsi_registers_cube_and_acquisition(client, db, tmp_path):
     assert acquisition is not None
     assert acquisition.capture_modality == "HSI"
     assert acquisition.envi_available is True
+
+
+def _stored_hdr(db) -> Path:
+    """The absolute path the single uploaded cube's header was stored at."""
+    return Path(storage.resolve(db.query(HsiCube).one().data_ref))
+
+
+def test_upload_accepts_a_dat_cube_binary(client, db, tmp_path):
+    """`.dat` is an extension SpectralPython does not probe for, so the pair has to be stored
+    with a shared stem and the binary handed to `open_envi()` explicitly. Rendering RGB proves
+    the cube itself loaded, not merely that the header parsed."""
+    meta = upload_hsi(client, write_envi_cube(tmp_path / "cube.hdr"), data_name="cube.dat")
+
+    assert (meta["width"], meta["height"]) == (4, 3)
+    assert meta["wavelengths_nm"] == [400.0, 450.0, 500.0, 550.0, 600.0]
+    hdr = _stored_hdr(db)
+    assert hdr.name == "cube.hdr"
+    assert hdr.with_suffix(".dat").is_file()
+
+    rgb = client.get(f"/api/datasets/{meta['id']}/rgb", params={"r": 600, "g": 500, "b": 400})
+    assert rgb.status_code == 200
+    assert open_image(rgb.content).size == (4, 3)
+
+
+def test_upload_normalises_a_dat_hdr_header_name(client, db, tmp_path):
+    """ENVI also names headers "<cube>.dat.hdr". Storing that verbatim would put the data
+    extension on the stem and derive "<cube>.dat.dat" for the binary."""
+    meta = upload_hsi(
+        client,
+        write_envi_cube(tmp_path / "cube.hdr"),
+        hdr_name="cube.dat.hdr",
+        data_name="cube.dat",
+    )
+
+    assert (meta["width"], meta["height"]) == (4, 3)
+    hdr = _stored_hdr(db)
+    assert hdr.name == "cube.hdr"
+    assert hdr.with_suffix(".dat").is_file()
+    assert not hdr.with_name("cube.dat.dat").exists()
 
 
 def test_uploaded_hsi_appears_in_the_listing(client, hsi):

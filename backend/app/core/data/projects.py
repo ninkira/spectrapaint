@@ -131,3 +131,31 @@ def dataset_owners(db: Session) -> dict[str, tuple[uuid.UUID, str, str]]:
         if dataset_id:
             owners[dataset_id] = (project_id, title, root)
     return owners
+
+
+def dataset_objects(db: Session) -> dict[str, tuple[uuid.UUID, str]]:
+    """`dataset_id` -> (object_id, object title), for every dataset that has one.
+
+    The Object is the physical thing investigated, so it is what makes two cubes "belong
+    together" — the grouping the Data Manager shows. Resolved in two queries, like
+    `dataset_owners`, because the registry builds this for everything at once.
+
+    An ExternalInput may have no acquisition, and therefore no object; those are simply absent
+    rather than guessed at.
+    """
+    objects: dict[str, tuple[uuid.UUID, str]] = {}
+
+    cubes = (
+        db.query(HsiCube.dataset_id, Object.object_id, Object.dc_title)
+        .join(DataAcquisition, DataAcquisition.acquisition_id == HsiCube.acquisition_id)
+        .join(Object, Object.object_id == DataAcquisition.object_id)
+    )
+    inputs = (
+        db.query(ExternalInput.dataset_id, Object.object_id, Object.dc_title)
+        .join(DataAcquisition, DataAcquisition.acquisition_id == ExternalInput.acquisition_id)
+        .join(Object, Object.object_id == DataAcquisition.object_id)
+    )
+    for dataset_id, object_id, title in list(cubes) + list(inputs):
+        if dataset_id:
+            objects[dataset_id] = (object_id, title)
+    return objects

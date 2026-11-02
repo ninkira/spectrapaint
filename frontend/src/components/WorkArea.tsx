@@ -1,11 +1,12 @@
 // src/components/WorkArea.tsx
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useApp } from '../state/AppContext'
 import PrimaryDisplay from './PrimaryDisplay'
-import SpectrumPlot, { type Spectrum } from './hsi_tools/SpectrumPlot'
+import SpectrumPlot, { type BandRange, type Spectrum } from './hsi_tools/SpectrumPlot'
 import DatasetInfo from './Dataset/DatasetInfo'
 import PigmentClassificationModal from './hsi_tools/PigmentClassification'
+import { setDatasetValidBands } from '../lib/api'
 
 // The 13 standard W3C WADM motivations, plus `analysis` (app-specific: covers
 // classification / analysis operations). Users can also type their own via "Custom…".
@@ -44,6 +45,7 @@ export default function WorkArea() {
     saveAnnotationsForDataset,
     setSelectedRoiId,
     setSelectedProbePointId,
+    refreshDatasets,
   } = useApp()
 
   const [regionSpectra, setRegionSpectra] = useState<Spectrum[]>([])
@@ -54,6 +56,32 @@ export default function WorkArea() {
   const [annotationMotivations, setAnnotationMotivations] = useState<string[]>([])
   const [addingCustomMotivation, setAddingCustomMotivation] = useState(false)
   const [customMotivationText, setCustomMotivationText] = useState('')
+
+  // Which bands of the selected cube are worth comparing. Null when nothing is excluded, so the
+  // plot shades nothing. A bound the cube does not set is open, hence the fall back to each end.
+  const validBands = useMemo<BandRange | null>(() => {
+    const bandCount = dataset?.wavelengths_nm?.length ?? 0
+    if (!dataset || !bandCount) return null
+    if (dataset.valid_band_min == null && dataset.valid_band_max == null) return null
+    return {
+      first: dataset.valid_band_min ?? 0,
+      last: dataset.valid_band_max ?? bandCount - 1,
+    }
+  }, [dataset])
+
+  const handleValidBandsChange = useCallback(
+    async (next: BandRange | null) => {
+      if (!dataset) return
+      await setDatasetValidBands(
+        dataset.id,
+        next ? { valid_band_min: next.first, valid_band_max: next.last } : {},
+      )
+      // The range travels on the DatasetMeta, so re-reading the list is what updates the shading
+      // — and what every later classification of this cube will be run against.
+      await refreshDatasets()
+    },
+    [dataset, refreshDatasets],
+  )
 
   const isRegionMode =
     selectionMode === 'rect' || selectionMode === 'ellipse' || selectionMode === 'polygon'
@@ -72,6 +100,13 @@ export default function WorkArea() {
     }
     return regionSpectra.length ? regionSpectra : globalSelectedSpectra
   }, [selectionMode, globalSelectedSpectra, selectedProbeGroupId, probeSpectraByGroupId, selectedRoiId, roiSpectraById, regionSpectra])
+
+  // The region drawn on the previous image describes that image, not this one. Held locally
+  // here rather than in the context, so it needs clearing here too — the rest of the preview
+  // state is reset alongside the dataset switch itself.
+  useEffect(() => {
+    setRegionSpectra([])
+  }, [dataset?.id])
 
   // An ROI drawn in this session already has its per-pixel spectra in memory. One loaded from
   // the database has none, so fetch the statistics measured when it was saved. Done here rather
@@ -185,6 +220,8 @@ export default function WorkArea() {
         stats={roiExtraction?.stats ?? null}
         wavelengthsNm={roiExtraction?.wavelengths_nm}
         title={title}
+        validBands={validBands}
+        onValidBandsChange={dataset?.type === 'hsi' ? handleValidBandsChange : undefined}
       />
     )
   }
@@ -405,6 +442,7 @@ export default function WorkArea() {
           selectedRoiId={selectedRoiId}
           roiSpectraById={roiSpectraById}
           roiExtraction={roiExtraction}
+          validBands={validBands}
         >
           {/* children */}
         </PigmentClassificationModal>

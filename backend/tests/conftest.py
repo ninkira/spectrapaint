@@ -76,6 +76,32 @@ def write_envi_cube(
     return hdr_path
 
 
+def write_cube_array(
+    hdr_path: Path, cube: np.ndarray, wavelengths: list[float] | None = None
+) -> Path:
+    """Write an arbitrary (lines, samples, bands) array as an ENVI cube; return the header path.
+
+    `write_envi_cube` generates its own values; this takes them, which is what a preprocessing
+    test needs in order to assert against a reflectance it constructed itself.
+    """
+    bands = cube.shape[2]
+    if wavelengths is None:
+        wavelengths = [400.0 + 50.0 * i for i in range(bands)]
+    hdr_path.parent.mkdir(parents=True, exist_ok=True)
+    envi.save_image(
+        str(hdr_path),
+        cube.astype(np.float32),
+        dtype=np.float32,
+        force=True,
+        interleave="bsq",
+        metadata={
+            "wavelength": [str(w) for w in wavelengths],
+            "wavelength units": "nm",
+        },
+    )
+    return hdr_path
+
+
 def write_spectral_library(
     hdr_path: Path,
     *,
@@ -140,8 +166,21 @@ def write_png(path: Path, *, width: int = 6, height: int = 4) -> Path:
     return path
 
 
-def upload_hsi(client: TestClient, hdr_path: Path, **meta) -> dict:
-    """POST an ENVI pair through the real upload endpoint and return the DatasetMeta."""
+def upload_hsi(
+    client: TestClient,
+    hdr_path: Path,
+    *,
+    hdr_name: str | None = None,
+    data_name: str | None = None,
+    **meta,
+) -> dict:
+    """POST an ENVI pair through the real upload endpoint and return the DatasetMeta.
+
+    `hdr_name` / `data_name` override the filenames sent in the multipart body — the bytes still
+    come from `hdr_path` and its `.img` sibling. That lets a test exercise the naming conventions
+    real exports use ("cube.hdr" + "cube.dat", or "cube.dat.hdr" + "cube.dat") without having to
+    rewrite the fixture on disk.
+    """
     payload = {"data_kind": "hsi", "target_modality": "HSI", **meta}
     img_path = hdr_path.with_suffix(".img")
     with open(hdr_path, "rb") as hdr, open(img_path, "rb") as data:
@@ -149,8 +188,8 @@ def upload_hsi(client: TestClient, hdr_path: Path, **meta) -> dict:
             "/api/datasets/upload",
             data={"metadata": json.dumps(payload)},
             files={
-                "file": (hdr_path.name, hdr, "application/octet-stream"),
-                "data": (img_path.name, data, "application/octet-stream"),
+                "file": (hdr_name or hdr_path.name, hdr, "application/octet-stream"),
+                "data": (data_name or img_path.name, data, "application/octet-stream"),
             },
         )
     assert response.status_code == 200, response.text
