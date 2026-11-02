@@ -21,8 +21,10 @@ services:
         APP_UID: ${SPECTRAPAINT_UID:-1000}
         APP_GID: ${SPECTRAPAINT_GID:-1000}
     image: spectrapaint:local
-    # Named, so `docker logs spectrapaint` and `docker exec -it spectrapaint sh` work.
-    container_name: spectrapaint
+    # Deliberately no `container_name`: a fixed name makes `docker compose up` fail with a name
+    # conflict for anyone who has the repository checked out twice, and the commands in
+    # INSTALL.md address the container through compose (`docker compose exec spectrapaint …`),
+    # which works from the service name above.
 
     ports:
       # Bound to 127.0.0.1 on purpose. SpectraPaint has no authentication — it is a personal
